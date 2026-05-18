@@ -15,9 +15,7 @@
 import dataclasses
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
-
-from mirage.accessor.s3 import S3Accessor
+from mirage.accessor.s3 import S3Accessor, S3Config
 from mirage.commands.builtin.s3 import COMMANDS as S3_COMMANDS
 from mirage.core.s3.copy import copy
 from mirage.core.s3.create import create
@@ -61,21 +59,6 @@ _S3_OPS = {
     "exists": exists,
     "find_flat": find,
 }
-
-
-class S3Config(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    bucket: str
-    region: str | None = None
-    endpoint_url: str | None = None
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
-    aws_session_token: str | None = None
-    aws_profile: str | None = None
-    path_style: bool = False
-    timeout: int = 30
-    proxy: str | None = None
 
 
 class S3Resource(BaseResource):

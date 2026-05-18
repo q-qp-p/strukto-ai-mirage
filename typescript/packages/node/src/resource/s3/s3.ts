@@ -23,6 +23,7 @@ import {
   find as findCore,
   type IndexCacheStore,
   mkdir as mkdirCore,
+  normalizeKeyPrefix,
   PathSpec,
   RAMIndexCacheStore,
   rangeRead as rangeReadCore,
@@ -86,7 +87,14 @@ export class S3Resource implements Resource {
   }
 
   constructor(config: S3Config) {
-    this.config = config
+    const normalized = normalizeKeyPrefix(config.keyPrefix)
+    const cfg: S3Config = { ...config }
+    if (normalized !== undefined) {
+      cfg.keyPrefix = normalized
+    } else {
+      delete cfg.keyPrefix
+    }
+    this.config = cfg
     this.accessor = new S3Accessor(this.config)
     this.index = new RAMIndexCacheStore({ ttl: this.indexTtl })
   }

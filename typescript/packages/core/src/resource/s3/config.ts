@@ -12,6 +12,8 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import * as kp from '../../utils/key_prefix.ts'
+
 export type S3BrowserOperation = 'GET' | 'PUT' | 'HEAD' | 'DELETE' | 'LIST' | 'COPY'
 
 export interface S3BrowserSignOptions {
@@ -47,6 +49,13 @@ export interface S3Config {
   presignedUrlProvider?: S3BrowserPresignedUrlProvider
   /** Optional default Content-Type for PUT via the presigner path. */
   defaultContentType?: string
+  /** Optional key prefix applied to all S3 paths. Leading slashes stripped; trailing slash enforced. */
+  keyPrefix?: string
+}
+
+export function normalizeKeyPrefix(v: string | undefined): string | undefined {
+  const out = kp.normalize(v)
+  return out === '' ? undefined : out
 }
 
 export interface S3ConfigRedacted extends Omit<

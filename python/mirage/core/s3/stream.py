@@ -50,7 +50,7 @@ async def read_stream(
     rec = record_stream("read", path, "s3")
     session = async_session(config)
     async with session.client(**_client_kwargs(config)) as client:
-        kwargs: dict = {"Bucket": config.bucket, "Key": _key(path)}
+        kwargs: dict = {"Bucket": config.bucket, "Key": _key(path, config)}
         if pinned_revision is not None:
             kwargs["VersionId"] = pinned_revision
         response = await client.get_object(**kwargs)
@@ -85,7 +85,7 @@ async def range_read(accessor: S3Accessor, path: PathSpec, start: int,
     async with session.client(**_client_kwargs(config)) as client:
         kwargs: dict = {
             "Bucket": config.bucket,
-            "Key": _key(path),
+            "Key": _key(path, config),
             "Range": f"bytes={start}-{end - 1}",
         }
         pinned_revision = revision_for(virtual)

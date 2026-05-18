@@ -126,9 +126,6 @@ async def rg(
             stderr = "\n".join(warnings).encode() if warnings else None
             if not results:
                 return b"", IOResult(exit_code=1, stderr=stderr)
-            p0_prefix = paths[0].prefix if paths else ""
-            if p0_prefix and args_l:
-                results = [p0_prefix + "/" + r.lstrip("/") for r in results]
             return "\n".join(results).encode(), IOResult(stderr=stderr)
 
         needs_full = args_l or context_before or context_after or type or glob
@@ -159,9 +156,6 @@ async def rg(
             stderr = "\n".join(warnings_f).encode() if warnings_f else None
             if not results:
                 return b"", IOResult(exit_code=1, stderr=stderr)
-            p0_prefix = paths[0].prefix if paths else ""
-            if p0_prefix and args_l:
-                results = [p0_prefix + "/" + r.lstrip("/") for r in results]
             return "\n".join(results).encode(), IOResult(stderr=stderr)
 
         pat = compile_pattern(pattern, i, F, w)
@@ -183,11 +177,6 @@ async def rg(
                     all_results.extend(f"{p.original}:{r}" for r in hits)
             if not all_results:
                 return b"", IOResult(exit_code=1)
-            p0_prefix = paths[0].prefix if paths else ""
-            if p0_prefix:
-                all_results = [
-                    p0_prefix + "/" + r.lstrip("/") for r in all_results
-                ]
             return "\n".join(all_results).encode(), IOResult()
 
         source = read_stream(accessor, paths[0])

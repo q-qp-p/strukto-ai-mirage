@@ -63,7 +63,7 @@ async def read_bytes(accessor: S3Accessor,
     if prefix and path.startswith(prefix):
         path = path[len(prefix):] or "/"
     config = accessor.config
-    key = _key(path)
+    key = _key(path, config)
     kwargs = {"Bucket": config.bucket, "Key": key}
     pinned_revision = revision_for(virtual)
     if pinned_revision is not None:
