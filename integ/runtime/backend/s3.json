@@ -1,7 +1,10 @@
 {
-  "requires": [
-    "s3"
-  ],
+  "requires": {
+    "python": [],
+    "typescript": [
+      "env:S3_ENDPOINT"
+    ]
+  },
   "cases": [
     {
       "id": "s3_read",

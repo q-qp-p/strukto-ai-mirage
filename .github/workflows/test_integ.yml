@@ -1891,18 +1891,26 @@ jobs:
       - name: Run the sandbox suites on e2b (python)
         run: ./python/.venv/bin/python integ/runtime/run.py sandbox
 
+      # The TypeScript e2b SDK's command stream sometimes ends before its
+      # end event against E2B Embed ("[unavailable] the connection to
+      # sandbox ... ended before the stream completed"), on any case, where
+      # the Python SDK's never has; one rerun keeps that upstream drop from
+      # failing the job. The cases are stateless lines, so a rerun is safe.
       - name: Run the sandbox suites on e2b (typescript)
         if: ${{ !cancelled() && env.MIRAGE_INTEG_E2B_SANDBOX != '' }}
         working-directory: integ
-        run: pnpm exec tsx runtime/run.ts sandbox
+        run: pnpm exec tsx runtime/run.ts sandbox || pnpm exec tsx runtime/run.ts sandbox
 
       - name: Run the sandbox suites on e2b through the CLI and both daemons
         if: ${{ !cancelled() && env.MIRAGE_INTEG_E2B_SANDBOX != '' }}
         run: |
-          bash integ/runtime/cli.sh \
-            "python/.venv/bin/mirage" \
-            "node typescript/packages/cli/dist/bin/mirage.js" \
-            sandbox
+          run() {
+            bash integ/runtime/cli.sh \
+              "python/.venv/bin/mirage" \
+              "node typescript/packages/cli/dist/bin/mirage.js" \
+              sandbox
+          }
+          run || run
 
       - name: E2B logs
         if: ${{ failure() }}

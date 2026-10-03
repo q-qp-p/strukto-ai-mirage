@@ -38,10 +38,7 @@ describe('LocalRuntime', () => {
       await mkdir(join(dir, 'sub'))
       await writeFile(join(dir, 'sub/inner.txt'), 'inner\n')
       const code = await readFile(
-        new URL(
-          `../../../../../../../integ/fixtures/runtime/${fixture}`,
-          import.meta.url,
-        ),
+        new URL(`../../../../../../../integ/fixtures/runtime/${fixture}`, import.meta.url),
         'utf8',
       )
       const result = await rt.run({ code, args: [], env: { MIRAGE_TEST_ROOT: dir }, stdin: null })
