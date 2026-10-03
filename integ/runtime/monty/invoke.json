@@ -1,0 +1,80 @@
+{
+  "cases": [
+    {
+      "id": "default_world_python3",
+      "world": {},
+      "steps": [
+        {
+          "command": "python3 -c \"print(6 * 7)\"",
+          "expect": {
+            "exit": 0,
+            "stdout": "42\n",
+            "stderr": ""
+          }
+        }
+      ]
+    },
+    {
+      "id": "python_alias",
+      "world": {
+        "runtimes": [
+          "monty",
+          "workspace"
+        ]
+      },
+      "steps": [
+        {
+          "command": "python -c 'print(6 * 7)'",
+          "expect": {
+            "exit": 0,
+            "stdout": "42\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "python3_file_names_its_runtime",
+      "world": {
+        "runtimes": [
+          "monty",
+          "workspace"
+        ]
+      },
+      "steps": [
+        {
+          "command": "cat /usr/bin/python3",
+          "expect": {
+            "exit": 0,
+            "stdout": "#!/bin/sh\n# python3 runs on the workspace's monty runtime.\ncommand python3 \"$@\"\n",
+            "stderr": ""
+          }
+        }
+      ]
+    },
+    {
+      "id": "module_flag_refused_by_name",
+      "world": {
+        "runtimes": [
+          "monty",
+          "workspace"
+        ]
+      },
+      "steps": [
+        {
+          "command": "python3 -m nosuchmodule",
+          "expect": {
+            "exit": 1,
+            "stderr": "python3: -m is not supported by the 'monty' runtime\n"
+          }
+        },
+        {
+          "command": "python -m json.tool",
+          "expect": {
+            "exit": 1,
+            "stderr": "python: -m is not supported by the 'monty' runtime\n"
+          }
+        }
+      ]
+    }
+  ]
+}
