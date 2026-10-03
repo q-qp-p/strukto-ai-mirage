@@ -96,8 +96,8 @@ runtime_variants() {
       . as $c
       | $c.runtimes[]
       | select($t.requires[$h][.] != null)
-      | select($only == "" or (($only | split(",")) | index(.)) != null)
       | . as $r
+      | select($only == "" or (($only | split(",")) | index($r)) != null)
       | $t.language[$r] as $lang
       | ($t.entry[$r] // {}) as $base
       | ($c.entry // {}) as $over
