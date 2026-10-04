@@ -18,10 +18,12 @@ from mirage.cli import config as config_module
 from mirage.cli import daemon as daemon_module
 from mirage.cli import job as job_module
 from mirage.cli import mcp as mcp_module
+from mirage.cli import rpc as rpc_module
 from mirage.cli import session as session_module
 from mirage.cli import shell as shell_module
 from mirage.cli import tools as tools_module
 from mirage.cli import workspace as workspace_module
+from mirage.cli.client import DaemonUnreachable
 from mirage.server.daemon_config import DaemonConfigError
 
 app = typer.Typer(
@@ -42,15 +44,20 @@ app.command("glob")(tools_module.glob_cmd)
 app.add_typer(daemon_module.app, name="daemon")
 app.add_typer(config_module.app, name="config")
 app.command("mcp")(mcp_module.mcp_cmd)
+app.command("rpc")(rpc_module.rpc_cmd)
 
 
 def main() -> None:
-    """Entry point that turns config errors into clean exit-2 lines."""
+    """Entry point that turns config errors into clean exit-2 lines and
+    an unreachable daemon into a clean exit-1 line."""
     try:
         app()
     except DaemonConfigError as e:
         typer.echo(str(e), err=True)
         raise SystemExit(2) from e
+    except DaemonUnreachable as e:
+        typer.echo(str(e), err=True)
+        raise SystemExit(1) from e
 
 
 if __name__ == "__main__":

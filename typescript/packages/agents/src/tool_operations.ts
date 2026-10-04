@@ -90,8 +90,13 @@ export class MirageToolOperations {
     this.shellOptions = options.sessionId === undefined ? {} : { sessionId: options.sessionId }
   }
 
-  async shell(command: string): Promise<ToolResult> {
-    return ioResult(await this.ws.shell(command, this.shellOptions))
+  private lineOptions(signal: AbortSignal | undefined): ExecuteOptions {
+    return signal === undefined ? this.shellOptions : { ...this.shellOptions, signal }
+  }
+
+  /** Run a line in the session's shell; `signal` aborts it, as in-app. */
+  async shell(command: string, signal?: AbortSignal): Promise<ToolResult> {
+    return ioResult(await this.ws.shell(command, this.lineOptions(signal)))
   }
 
   async read(path: string, offset = 0, limit = 2000): Promise<ToolResult> {
@@ -171,7 +176,7 @@ export class MirageToolOperations {
   ): Promise<ToolResult> {
     let content: string
     try {
-      content = (await this.versions.readForEdit(path)).toString('utf8')
+      content = decode(await this.versions.readForEdit(path))
     } catch (err) {
       if (err instanceof StaleMirageFileError) return errorResult(`Error: ${err.message}`)
       if (!(await this.versions.vfs.exists(path))) {
@@ -195,15 +200,17 @@ export class MirageToolOperations {
     return textResult(`Edited: ${path} (${String(occurrences)} occurrence(s))`)
   }
 
-  async ls(path: string): Promise<ToolResult> {
-    return ioResult(await this.ws.shell(`ls ${shQuote(path)}`, this.shellOptions))
+  async ls(path: string, signal?: AbortSignal): Promise<ToolResult> {
+    return ioResult(await this.ws.shell(`ls ${shQuote(path)}`, this.lineOptions(signal)))
   }
 
   /**
    * Search recursively for a pattern, as `grep -rn` does. Each option is
    * the GNU grep flag of the same name, and the line runs in the
    * session's shell, so the search is the shell's own: the same policy,
-   * push-down and history as typing it.
+   * push-down and history as typing it. grep exits 1 when nothing
+   * matched, an empty answer rather than a failure, so only an exit above
+   * 1 (a bad regex, an unreadable path) is a tool error.
    */
   async grep(
     pattern: string,
@@ -217,6 +224,7 @@ export class MirageToolOperations {
       count?: boolean | undefined
       maxCount?: number | undefined
     } = {},
+    signal?: AbortSignal,
   ): Promise<ToolResult> {
     const words = ['grep', '-rn']
     if (options.ignoreCase === true) words.push('-i')
@@ -227,11 +235,7 @@ export class MirageToolOperations {
     if (options.context !== undefined) words.push('-C', String(options.context))
     if (options.include !== undefined) words.push(shQuote(`--include=${options.include}`))
     words.push('-e', shQuote(pattern), shQuote(path))
-    const io = await this.ws.shell(words.join(' '), this.shellOptions)
-    // grep exits 1 for "no match", which is a normal empty answer, and
-    // >1 for a real failure (bad regex, unreadable path). Only the
-    // second is a tool error; reporting the first as one would tell the
-    // agent its search broke every time nothing matched.
+    const io = await this.ws.shell(words.join(' '), this.lineOptions(signal))
     const result = textResult(ioToStr(io))
     if (io.exitCode > 1) result.isError = true
     return result
@@ -266,10 +270,14 @@ export class MirageToolOperations {
    * to this method, so each tool answers the same way through each of
    * them. Throws for a name no tool has. Mirrors Python's `call`.
    */
-  async call(name: string, args: Readonly<Record<string, unknown>>): Promise<ToolResult> {
+  async call(
+    name: string,
+    args: Readonly<Record<string, unknown>>,
+    signal?: AbortSignal,
+  ): Promise<ToolResult> {
     switch (name) {
       case 'shell':
-        return this.shell(args.command as string)
+        return this.shell(args.command as string, signal)
       case 'read':
         return this.read(
           args.path as string,
@@ -286,17 +294,22 @@ export class MirageToolOperations {
           (args.replace_all as boolean | undefined) ?? false,
         )
       case 'ls':
-        return this.ls(args.path as string)
+        return this.ls(args.path as string, signal)
       case 'grep':
-        return this.grep(args.pattern as string, args.path as string, {
-          ignoreCase: args.ignore_case as boolean | undefined,
-          fixedStrings: args.fixed_strings as boolean | undefined,
-          include: args.include as string | undefined,
-          context: args.context as number | undefined,
-          filesWithMatches: args.files_with_matches as boolean | undefined,
-          count: args.count as boolean | undefined,
-          maxCount: args.max_count as number | undefined,
-        })
+        return this.grep(
+          args.pattern as string,
+          args.path as string,
+          {
+            ignoreCase: args.ignore_case as boolean | undefined,
+            fixedStrings: args.fixed_strings as boolean | undefined,
+            include: args.include as string | undefined,
+            context: args.context as number | undefined,
+            filesWithMatches: args.files_with_matches as boolean | undefined,
+            count: args.count as boolean | undefined,
+            maxCount: args.max_count as number | undefined,
+          },
+          signal,
+        )
       case 'glob':
         return this.glob(args.pattern as string, (args.path as string | undefined) ?? '/')
       default:

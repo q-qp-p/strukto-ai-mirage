@@ -38,17 +38,15 @@ describe('WorkspaceRegistry', () => {
   })
 
   it('joins an overlapping remove instead of deleting the id again', async () => {
-    // A second deletion of its own would stop the runner again and run
-    // its cleanup, then release the id after a create had reused it.
+    // A second deletion of its own would stop the runner again, then
+    // release the id after a create had reused it.
     const r = new WorkspaceRegistry()
     const entry = r.add(new Workspace({ '/': new RAMVFS() }, { mode: MountMode.WRITE }), 'w')
     const stop = vi.spyOn(entry.runner, 'stop')
-    const cleanup = vi.fn(() => Promise.resolve())
-    const [first, second] = await Promise.all([r.remove('w', cleanup), r.remove('w', cleanup)])
+    const [first, second] = await Promise.all([r.remove('w'), r.remove('w')])
     expect(first).toBe(entry)
     expect(second).toBe(entry)
     expect(stop).toHaveBeenCalledTimes(1)
-    expect(cleanup).toHaveBeenCalledTimes(1)
     expect(r.has('w')).toBe(false)
   })
 

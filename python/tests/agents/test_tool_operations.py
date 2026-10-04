@@ -123,6 +123,14 @@ async def test_edit_replaces_once(ops, workspace):
 
 
 @pytest.mark.asyncio
+async def test_edit_keeps_a_utf8_bom(ops, workspace):
+    await workspace.vfs.write("/bom.txt", b"\xef\xbb\xbfhello world")
+    result = await ops.edit("/bom.txt", "world", "there")
+    assert result.is_error is False
+    assert await workspace.vfs.read("/bom.txt") == b"\xef\xbb\xbfhello there"
+
+
+@pytest.mark.asyncio
 async def test_edit_missing_file(ops):
     result = await ops.edit("/missing.txt", "x", "y")
     assert result.is_error is True

@@ -37,6 +37,7 @@ const TAB = 0x09
 const LF = 0x0a
 const CR = 0x0d
 const BS = 0x08
+const BEL = 0x07
 const DEL = 0x7f
 const ETX = 0x03
 const EOT = 0x04
@@ -58,8 +59,9 @@ type EscapeState = 'none' | 'start' | 'csi' | 'ss3'
 /**
  * The cooked-mode line discipline a pty gives a shell: echo, erase
  * (Backspace, Ctrl-U), Enter, Ctrl-C and Ctrl-D, with escape sequences
- * such as arrow keys swallowed. asyncssh ships one, which the Python door
- * uses; ssh2 does not, so the TypeScript door carries this small one.
+ * such as arrow keys swallowed. ssh2 ships none, so every pty runs this
+ * one; the Python server runs its twin only for a pty without a terminal
+ * type, as asyncssh's own line editor serves the rest.
  */
 export class LineDiscipline {
   private line: number[] = []
@@ -118,7 +120,7 @@ export class LineDiscipline {
     }
     if (b < 0x20 && b !== TAB) return
     if (this.line.length >= MAX_TERMINAL_LINE) {
-      this.echoed.push(0x07)
+      this.echoed.push(BEL)
       return
     }
     this.line.push(b)

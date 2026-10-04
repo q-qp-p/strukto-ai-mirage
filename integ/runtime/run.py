@@ -26,6 +26,8 @@ import logging  # noqa: E402
 import os  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
+import shutil  # noqa: E402
+import tempfile  # noqa: E402
 import uuid  # noqa: E402
 from collections.abc import Awaitable, Callable  # noqa: E402
 from dataclasses import replace  # noqa: E402
@@ -70,16 +72,26 @@ BUCKET = "mirage-integ-runtime"
 # What a case's `backends` entry needs on this host before it can run.
 BACKEND_REQUIRES: dict[str, list[str]] = {
     "ram": [],
+    "disk": [],
+    "ssh": ["env:MIRAGE_INTEG_SSH_HOST"],
     "redis": ["env:REDIS_URL"],
     "s3": ["s3"],
 }
 # The guest language of every runtime a case's `runtimes` may name, and
-# the line head a step's program runs under in it.
-RUNTIME_LANGUAGE: dict[str, str] = {
+# the line head a step's program runs under in it. A sandbox has none: it
+# runs whole lines, so a case's plain commands are its program.
+RUNTIME_LANGUAGE: dict[str, str | None] = {
     "monty": "python",
     "wasi": "python",
     "pyodide": "python",
     "quickjs": "js",
+    "local": "python",
+    "sandlock": "python",
+    "docker": None,
+    "ssh": None,
+    "e2b": None,
+    "smolvm": None,
+    "apple_container": None,
 }
 PROGRAM_HEAD: dict[str, str] = {"python": "python3 -c", "js": "node -e"}
 # What a `runtimes` entry needs on this host before it can run. A runtime
@@ -89,7 +101,49 @@ RUNTIME_REQUIRES: dict[str, list[str]] = {
     "monty": [],
     "wasi": ["env:MIRAGE_WASI_HOME"],
     "quickjs": ["env:MIRAGE_QUICKJS_HOME"],
+    "local": [],
+    "sandlock": ["env:MIRAGE_INTEG_SANDLOCK"],
+    "docker": ["env:MIRAGE_INTEG_DOCKER_CONTAINER"],
+    "ssh": ["env:MIRAGE_INTEG_SSH_HOST"],
+    "e2b": ["env:MIRAGE_INTEG_E2B_SANDBOX"],
+    "smolvm": ["env:MIRAGE_INTEG_SMOLVM_MACHINE"],
+    "apple_container": ["env:MIRAGE_INTEG_APPLE_CONTAINER"],
 }
+# The world entry a runtime is built from, before a case's own `entry`
+# narrows its captures or adds config. A sandbox is reached through
+# config the job provides; a name missing here is built by name alone.
+RUNTIME_ENTRY: dict[str, dict[str, Any]] = {
+    "sandlock": {"captures": ["python3", "node", "@external"]},
+    "docker": {
+        "captures": ["*"],
+        "config": {"container": "${MIRAGE_INTEG_DOCKER_CONTAINER}"},
+    },
+    "ssh": {
+        "captures": ["*"],
+        "config": {
+            "host": "${MIRAGE_INTEG_SSH_HOST}",
+            "port": 2222,
+            "username": "${MIRAGE_INTEG_SSH_USERNAME}",
+            "identity_file": "${MIRAGE_INTEG_SSH_KEY}",
+        },
+    },
+    "e2b": {
+        "captures": ["*"],
+        "config": {"sandbox_id": "${MIRAGE_INTEG_E2B_SANDBOX}"},
+    },
+    "smolvm": {
+        "captures": ["*"],
+        "config": {"machine": "${MIRAGE_INTEG_SMOLVM_MACHINE}"},
+    },
+    "apple_container": {
+        "captures": ["*"],
+        "config": {"container": "${MIRAGE_INTEG_APPLE_CONTAINER}"},
+    },
+}
+# Runtimes that need a host the hosted runners do not give every job
+# (a live sandbox, a hypervisor, Landlock): an unmet requirement skips
+# their variants even under INTEG_RUNTIME_STRICT.
+OPTIONAL_RUNTIMES = {"sandlock", "e2b", "smolvm", "apple_container"}
 
 _moto_server: Any = None
 _s3_endpoint: str | None = None
@@ -471,6 +525,29 @@ async def _build_vfs(spec: dict[str, Any], run_id: str) -> Any:
                 }
             )
         return vfs
+    if kind == "disk":
+        from mirage.vfs.disk import DiskVFS
+
+        return DiskVFS(
+            tempfile.mkdtemp(prefix=f"mirage-integ-runtime-{run_id}-")
+        )
+    if kind == "ssh":
+        from mirage.vfs.ssh import SSHVFS, SSHConfig
+
+        # The ssh runtime's box: a fresh directory per mount, made before
+        # the mount is, since a root that does not exist serves nothing.
+        vfs = SSHVFS(
+            SSHConfig(
+                host=os.environ["MIRAGE_INTEG_SSH_HOST"],
+                port=2222,
+                username=os.environ.get("MIRAGE_INTEG_SSH_USERNAME"),
+                identity_file=os.environ.get("MIRAGE_INTEG_SSH_KEY"),
+                root=f"/tmp/mirage-integ-runtime-{run_id}",
+            )
+        )
+        sftp = await vfs.accessor.sftp()
+        await sftp.mkdir(vfs.config.root)
+        return vfs
     if kind == "redis":
         from mirage.vfs.redis import RedisVFS
 
@@ -621,12 +698,17 @@ async def _run_facade(
         expect (dict[str, Any]): ``value`` (JSON-comparable result) or
             ``throws_contains``.
         spec (dict[str, Any]): ``method`` (the python facade spelling,
-            e.g. ``is_dir``), ``path``, and ``data`` for ``append``.
+            e.g. ``is_dir``), ``path``, ``data`` for a write, ``offset``
+            for ``pwrite`` and ``length`` for ``truncate``.
     """
     method = getattr(ws.vfs, spec["method"])
     args: list[Any] = [spec["path"]]
     if "data" in spec:
         args.append(spec["data"].encode())
+    if "offset" in spec:
+        args.append(spec["offset"])
+    if "length" in spec:
+        args.append(spec["length"])
     if "errno" in expect:
         # The cross-language error assertion. `throws_contains` reads the
         # message, which the two languages word differently for the same
@@ -796,10 +878,12 @@ def _for_runtime(case: dict[str, Any], runtime: str) -> dict[str, Any] | None:
     maps a guest language to what that language runs, under ``python3
     -c`` or ``node -e``, and a ``command`` map gives the whole line per
     language; a step with nothing in the runtime's language is left out,
-    and a case left with no program is not the runtime's. A step's
-    ``expect_on`` keyed by the runtime, then by ``runtime@host``, is what
-    it answers differently, and the case's ``filesystem`` entry for it is
-    the capabilities it declares.
+    and a case left with no program is not the runtime's (a sandbox runs
+    the plain lines). A step's ``expect_on`` keyed by the runtime, then
+    by ``runtime@host``, is what it answers differently, and the case's
+    ``filesystem`` entry for it is the capabilities it declares. The
+    world runs the runtime from its ``RUNTIME_ENTRY``, with the case's
+    ``entry`` captures and config laid over it.
 
     Args:
         case (dict[str, Any]): the case as the suite spells it.
@@ -838,10 +922,10 @@ def _for_runtime(case: dict[str, Any], runtime: str) -> dict[str, Any] | None:
             **on.get(f"{runtime}@{HOST}", {}),
         }
         steps.append({**step, "expect": expect})
-    if programs == 0:
+    if programs == 0 and language is not None:
         return None
     world = copy.deepcopy(case.get("world", {}))
-    world["runtimes"] = [runtime, "workspace"]
+    world["runtimes"] = [_entry(runtime, case.get("entry", {})), "workspace"]
     variant = {
         **case,
         "id": f"{case['id']}@{runtime}",
@@ -849,12 +933,33 @@ def _for_runtime(case: dict[str, Any], runtime: str) -> dict[str, Any] | None:
         "world": world,
         "steps": steps,
         "requires": case.get("requires", []) + RUNTIME_REQUIRES[runtime],
+        "optional": runtime in OPTIONAL_RUNTIMES,
     }
     if runtime in case.get("filesystem", {}):
         variant["filesystem"] = {runtime: case["filesystem"][runtime]}
     else:
         variant.pop("filesystem", None)
     return variant
+
+
+def _entry(runtime: str, override: dict[str, Any]) -> Any:
+    """The world entry for one runtime of a case's matrix.
+
+    Args:
+        runtime (str): the runtime's name.
+        override (dict[str, Any]): the case's ``entry``: ``captures``
+            replace the runtime's, ``config`` keys join its config.
+    """
+    base = RUNTIME_ENTRY.get(runtime, {})
+    if not base and not override:
+        return runtime
+    entry = {"name": runtime, **base, **override}
+    if "config" in base or "config" in override:
+        entry["config"] = {
+            **base.get("config", {}),
+            **override.get("config", {}),
+        }
+    return entry
 
 
 def _variants(case: dict[str, Any]) -> list[dict[str, Any]]:
@@ -876,9 +981,14 @@ def _variants(case: dict[str, Any]) -> list[dict[str, Any]]:
         unknown = [r for r in case["runtimes"] if r not in RUNTIME_LANGUAGE]
         if unknown:
             raise ValueError(f"{case['id']}: unknown runtimes {unknown}")
+        only = {
+            r for r in os.environ.get("INTEG_RUNTIMES", "").split(",") if r
+        }
         variants = []
         for runtime in case["runtimes"]:
-            if runtime not in RUNTIME_REQUIRES:
+            if runtime not in RUNTIME_REQUIRES or (
+                only and runtime not in only
+            ):
                 continue
             variant = _for_runtime(case, runtime)
             if variant is not None:
@@ -909,6 +1019,22 @@ def _backend_variants(case: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return variants
+
+
+async def _remove_roots(ws: Workspace) -> None:
+    """Remove the directory each disk and ssh backend mount was given.
+
+    Args:
+        ws (Workspace): the case's workspace, still open, since an ssh
+            root goes over the mount's own connection.
+    """
+    for entry in ws.mounts():
+        vfs = entry.vfs
+        if vfs.name == "disk":
+            await asyncio.to_thread(shutil.rmtree, vfs.root)
+        elif vfs.name == "ssh":
+            sftp = await vfs.accessor.sftp()
+            await sftp.rmtree(vfs.config.root)
 
 
 async def _run_case(suite: str, case: dict[str, Any]) -> list[str]:
@@ -953,7 +1079,10 @@ async def _run_case(suite: str, case: dict[str, Any]) -> list[str]:
                 }
             problems.extend(await _run_step(ws, case_id, index, step))
     finally:
-        await ws.close()
+        try:
+            await _remove_roots(ws)
+        finally:
+            await ws.close()
     return problems
 
 
@@ -962,10 +1091,12 @@ async def main() -> int:
     strict = os.environ.get("INTEG_RUNTIME_STRICT") == "1"
     passed = failed = skipped = 0
     failures: list[str] = []
-    for path in sorted(SUITE_DIR.glob("*.json")):
+    for path in sorted(SUITE_DIR.rglob("*.json")):
         suite = json.loads(path.read_text())
-        name = suite["suite"]
-        if only and name not in only:
+        name = path.relative_to(SUITE_DIR).with_suffix("").as_posix()
+        if only and not any(
+            name == o or name.startswith(f"{o}/") for o in only
+        ):
             continue
         requires = suite.get("requires", {})
         if isinstance(requires, list):
@@ -994,7 +1125,7 @@ async def main() -> int:
                     if not _requirement_met(r)
                 ]
                 if unmet:
-                    if strict:
+                    if strict and not case.get("optional", False):
                         failures.append(
                             f"{name}/{case['id']}: unmet requirements {unmet} "
                             "(INTEG_RUNTIME_STRICT=1)"

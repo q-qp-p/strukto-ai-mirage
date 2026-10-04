@@ -62,4 +62,4 @@ export {
   readDaemonTable,
   validateDaemonTable,
 } from './daemon_config.ts'
-export { mirageHome, pidFilePath, snapshotRootPath, versionRootPath } from './paths.ts'
+export { mirageHome, pidFilePath } from './paths.ts'

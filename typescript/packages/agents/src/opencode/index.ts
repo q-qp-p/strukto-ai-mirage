@@ -19,7 +19,7 @@ import { encodeBase64 } from '@struktoai/mirage-core/utils/base64'
 import { gnuDirname } from '@struktoai/mirage-core/utils/path'
 import { FileVersionTracker } from '../file_version.ts'
 import { readWorkspaceFile } from '../read_file.ts'
-import { replaceText, withRefusal } from '../io_text.ts'
+import { decode, replaceText, withRefusal } from '../io_text.ts'
 
 const z = tool.schema
 
@@ -158,7 +158,7 @@ export function mirageTools(
       const versions = trackerFor(trackers, w, ctx, staleWriteProtection, sessionId)
       let current: string
       try {
-        current = (await versions.readForEdit(filePath)).toString('utf8')
+        current = decode(await versions.readForEdit(filePath))
       } catch (err) {
         if (await versions.vfs.exists(filePath)) return `Error: ${errMsg(err)}`
         return `Error: file '${filePath}' not found`

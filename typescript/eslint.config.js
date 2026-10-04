@@ -237,5 +237,36 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // The vercel and openai adapters are the agent loops a browser app
+    // bundles, so every module they load must run without Node. A
+    // `node:crypto` import in file_version.ts typechecked, tested and
+    // built clean and only failed inside a browser bundle.
+    files: [
+      'packages/agents/src/{file_version,io_text,prompt,read_file,tool_descriptions,tool_operations}.ts',
+      'packages/agents/src/{openai,read_file,vercel}/**/*.ts',
+    ],
+    ignores: ['**/*.test.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['node:*'],
+              message: 'The vercel and openai adapters run in browsers; use a Web API.',
+            },
+          ],
+        },
+      ],
+      'no-restricted-globals': [
+        'error',
+        ...['Buffer', 'process'].map((name) => ({
+          name,
+          message: `${name} is Node-only; the vercel and openai adapters run in browsers.`,
+        })),
+      ],
+    },
+  },
   prettierConfig,
 )

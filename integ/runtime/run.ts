@@ -13,14 +13,17 @@
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import { parseCommandLimits } from '@struktoai/mirage-core/policy/builtin/output_cap'
-import { readdirSync, readFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CreateBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { MongoClient } from 'mongodb'
+import type { FileEntryWithStats, SFTPWrapper } from 'ssh2'
 import {
   buildRuntime,
   CLISpec,
+  DiskVFS,
   Limit,
   MongoDBVFS,
   MountMode,
@@ -33,6 +36,7 @@ import {
   Runtime,
   S3VFS,
   ScriptSource,
+  SSHVFS,
   snakeToCamel,
   Workspace,
   type Action,
@@ -88,6 +92,8 @@ interface FacadeSpec {
   method: string
   path: string
   data?: string
+  offset?: number
+  length?: number
 }
 
 interface Step {
@@ -164,6 +170,8 @@ interface Case {
   backends?: string[]
   backend?: string
   requires?: string[]
+  optional?: boolean
+  entry?: { captures?: string[]; config?: Record<string, unknown> }
   world?: World
   filesystem?: Record<string, Partial<Record<FilesystemOperation, boolean>>>
   build_error?: { contains: string }
@@ -171,7 +179,6 @@ interface Case {
 }
 
 interface Suite {
-  suite: string
   requires?: string[] | Record<string, string[]>
   optional?: boolean
   cases: Case[]
@@ -503,6 +510,31 @@ async function buildVfs(spec: MountSpecJson, runId: string): Promise<BaseVFS> {
     }
     return vfs
   }
+  if (spec.vfs === 'disk') {
+    return new DiskVFS({ root: mkdtempSync(join(tmpdir(), `mirage-integ-runtime-ts-${runId}-`)) })
+  }
+  if (spec.vfs === 'ssh') {
+    // The ssh runtime's box: a fresh directory per mount, made before the
+    // mount is, since a root that does not exist serves nothing.
+    const root = `/tmp/mirage-integ-runtime-ts-${runId}`
+    const username = process.env.MIRAGE_INTEG_SSH_USERNAME
+    const identityFile = process.env.MIRAGE_INTEG_SSH_KEY
+    const vfs = new SSHVFS({
+      host: process.env.MIRAGE_INTEG_SSH_HOST ?? '',
+      port: 2222,
+      ...(username === undefined ? {} : { username }),
+      ...(identityFile === undefined ? {} : { identityFile }),
+      root,
+    })
+    const sftp = await vfs.accessor.sftp()
+    await new Promise<void>((resolve, reject) => {
+      sftp.mkdir(root, (err) => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+    return vfs
+  }
   if (spec.vfs === 'redis') {
     return new RedisVFS({
       url: process.env.REDIS_URL ?? '',
@@ -676,6 +708,8 @@ async function runFacade(ws: Workspace, expect: Expect, spec: FacadeSpec): Promi
   if (method === undefined) return [`facade has no method ${spec.method}`]
   const args: unknown[] = [spec.path]
   if (spec.data !== undefined) args.push(ENC.encode(spec.data))
+  if (spec.offset !== undefined) args.push(spec.offset)
+  if (spec.length !== undefined) args.push(spec.length)
   if (expect.errno !== undefined) {
     // The cross-language error assertion. `throws_contains` reads the
     // message, which the two languages word differently for the same
@@ -808,25 +842,80 @@ async function runStep(
 // What a case's `backends` entry needs on this host before it can run.
 const BACKEND_REQUIRES: Record<string, string[]> = {
   ram: [],
+  disk: [],
+  ssh: ['env:MIRAGE_INTEG_SSH_HOST'],
   redis: ['env:REDIS_URL'],
   s3: ['s3'],
 }
 // The guest language of every runtime a case's `runtimes` may name, and
-// the line head a step's program runs under in it.
-const RUNTIME_LANGUAGE: Record<string, string> = {
+// the line head a step's program runs under in it. A sandbox has none: it
+// runs whole lines, so a case's plain commands are its program.
+const RUNTIME_LANGUAGE: Record<string, string | null> = {
   monty: 'python',
   wasi: 'python',
   pyodide: 'python',
   quickjs: 'js',
+  local: 'python',
+  sandlock: 'python',
+  docker: null,
+  ssh: null,
+  e2b: null,
+  smolvm: null,
+  apple_container: null,
 }
 const PROGRAM_HEAD: Record<string, string> = { python: 'python3 -c', js: 'node -e' }
 // What a `runtimes` entry needs on this host before it can run. A runtime
 // missing here does not exist on this host (wasi is python's), so its
-// variant is not listed at all.
+// variant is not listed at all. e2b is left out: E2B's sandbox proxy drops
+// the JS SDK's command streams now and then (see the README).
 const RUNTIME_REQUIRES: Record<string, string[]> = {
   monty: [],
   pyodide: [],
   quickjs: [],
+  local: [],
+  sandlock: ['env:MIRAGE_INTEG_SANDLOCK'],
+  docker: ['env:MIRAGE_INTEG_DOCKER_CONTAINER'],
+  ssh: ['env:MIRAGE_INTEG_SSH_HOST'],
+  smolvm: ['env:MIRAGE_INTEG_SMOLVM_MACHINE'],
+  apple_container: ['env:MIRAGE_INTEG_APPLE_CONTAINER'],
+}
+// The world entry a runtime is built from, before a case's own `entry`
+// narrows its captures or adds config. Mirrors run.py RUNTIME_ENTRY.
+const RUNTIME_ENTRY: Record<string, { captures?: string[]; config?: Record<string, unknown> }> = {
+  sandlock: { captures: ['python3', 'node', '@external'] },
+  docker: { captures: ['*'], config: { container: '${MIRAGE_INTEG_DOCKER_CONTAINER}' } },
+  ssh: {
+    captures: ['*'],
+    config: {
+      host: '${MIRAGE_INTEG_SSH_HOST}',
+      port: 2222,
+      username: '${MIRAGE_INTEG_SSH_USERNAME}',
+      identity_file: '${MIRAGE_INTEG_SSH_KEY}',
+    },
+  },
+  e2b: { captures: ['*'], config: { sandbox_id: '${MIRAGE_INTEG_E2B_SANDBOX}' } },
+  smolvm: { captures: ['*'], config: { machine: '${MIRAGE_INTEG_SMOLVM_MACHINE}' } },
+  apple_container: {
+    captures: ['*'],
+    config: { container: '${MIRAGE_INTEG_APPLE_CONTAINER}' },
+  },
+}
+// Runtimes that need a host the hosted runners do not give every job: an
+// unmet requirement skips their variants even under INTEG_RUNTIME_STRICT.
+const OPTIONAL_RUNTIMES = new Set(['sandlock', 'e2b', 'smolvm', 'apple_container'])
+
+/** The world entry for one runtime of a case's matrix. Mirrors run.py `_entry`. */
+function runtimeEntry(
+  runtime: string,
+  override: { captures?: string[]; config?: Record<string, unknown> },
+): string | Record<string, unknown> {
+  const base = RUNTIME_ENTRY[runtime] ?? {}
+  if (Object.keys(base).length === 0 && Object.keys(override).length === 0) return runtime
+  const entry: Record<string, unknown> = { name: runtime, ...base, ...override }
+  if (base.config !== undefined || override.config !== undefined) {
+    entry.config = { ...base.config, ...override.config }
+  }
+  return entry
 }
 
 /**
@@ -841,8 +930,8 @@ const RUNTIME_REQUIRES: Record<string, string[]> = {
  * capabilities it declares. Mirrors run.py `_for_runtime`.
  */
 function forRuntime(testCase: Case, runtime: string): Case | null {
-  const language = RUNTIME_LANGUAGE[runtime] ?? ''
-  const head = PROGRAM_HEAD[language] ?? ''
+  const language = RUNTIME_LANGUAGE[runtime] ?? null
+  const head = PROGRAM_HEAD[language ?? ''] ?? ''
   const steps: Step[] = []
   let programs = 0
   for (const listed of testCase.steps ?? []) {
@@ -851,7 +940,7 @@ function forRuntime(testCase: Case, runtime: string): Case | null {
       (k) => typeof listed[k] === 'object',
     )
     if (key !== undefined) {
-      const source = (listed[key] as Record<string, string>)[language]
+      const source = (listed[key] as Record<string, string>)[language ?? '']
       if (source === undefined) continue
       programs += 1
       const rest = { ...listed }
@@ -867,9 +956,9 @@ function forRuntime(testCase: Case, runtime: string): Case | null {
     const expect = { ...(step.expect ?? {}), ...on[runtime], ...on[`${runtime}@${HOST}`] }
     steps.push({ ...step, expect })
   }
-  if (programs === 0) return null
+  if (programs === 0 && language !== null) return null
   const world = structuredClone(testCase.world ?? {})
-  world.runtimes = [runtime, 'workspace']
+  world.runtimes = [runtimeEntry(runtime, testCase.entry ?? {}), 'workspace']
   return {
     ...testCase,
     id: `${testCase.id}@${runtime}`,
@@ -877,6 +966,7 @@ function forRuntime(testCase: Case, runtime: string): Case | null {
     world,
     steps,
     requires: [...(testCase.requires ?? []), ...(RUNTIME_REQUIRES[runtime] ?? [])],
+    optional: OPTIONAL_RUNTIMES.has(runtime),
     filesystem: Object.fromEntries(
       Object.entries(testCase.filesystem ?? {}).filter(([name]) => name === runtime),
     ),
@@ -896,8 +986,10 @@ function variants(testCase: Case): Case[] {
   if (testCase.runtimes === undefined) return backendVariants(testCase)
   const unknown = testCase.runtimes.filter((r) => RUNTIME_LANGUAGE[r] === undefined)
   if (unknown.length > 0) throw new Error(`${testCase.id}: unknown runtimes ${unknown.join(', ')}`)
+  const only = new Set((process.env.INTEG_RUNTIMES ?? '').split(',').filter((r) => r !== ''))
   return testCase.runtimes
     .filter((runtime) => RUNTIME_REQUIRES[runtime] !== undefined)
+    .filter((runtime) => only.size === 0 || only.has(runtime))
     .flatMap((runtime) => {
       const variant = forRuntime(testCase, runtime)
       return variant === null ? [] : backendVariants(variant)
@@ -924,6 +1016,45 @@ function backendVariants(testCase: Case): Case[] {
         ...(BACKEND_REQUIRES[backend] ?? [`unknown backend ${backend}`]),
       ],
     }
+  })
+}
+
+// Remove the directory each disk and ssh backend mount was given; an ssh root
+// goes over the mount's own connection, so this runs before the close.
+async function removeRoots(ws: Workspace): Promise<void> {
+  for (const entry of ws.mounts()) {
+    const vfs = entry.vfs
+    if (vfs instanceof DiskVFS) rmSync(vfs.root, { recursive: true })
+    else if (vfs instanceof SSHVFS)
+      await removeRemote(await vfs.accessor.sftp(), vfs.config.root ?? '/')
+  }
+}
+
+async function removeRemote(sftp: SFTPWrapper, dir: string): Promise<void> {
+  const entries = await new Promise<FileEntryWithStats[]>((resolveFn, rejectFn) => {
+    sftp.readdir(dir, (err, list) => {
+      if (err) rejectFn(err)
+      else resolveFn(list)
+    })
+  })
+  for (const entry of entries) {
+    const path = `${dir}/${entry.filename}`
+    if (entry.attrs.isDirectory()) {
+      await removeRemote(sftp, path)
+      continue
+    }
+    await new Promise<void>((resolveFn, rejectFn) => {
+      sftp.unlink(path, (err) => {
+        if (err) rejectFn(err)
+        else resolveFn()
+      })
+    })
+  }
+  await new Promise<void>((resolveFn, rejectFn) => {
+    sftp.rmdir(dir, (err) => {
+      if (err) rejectFn(err)
+      else resolveFn()
+    })
   })
 }
 
@@ -972,7 +1103,11 @@ async function runCase(suite: string, testCase: Case): Promise<string[]> {
       problems.push(...(await runStep(ws, caseId, index, step)))
     }
   } finally {
-    await ws.close()
+    try {
+      await removeRoots(ws)
+    } finally {
+      await ws.close()
+    }
   }
   return problems
 }
@@ -984,23 +1119,23 @@ async function main(): Promise<number> {
   let failed = 0
   let skipped = 0
   const failures: string[] = []
-  const files = readdirSync(SUITE_DIR)
+  const files = readdirSync(SUITE_DIR, { recursive: true, encoding: 'utf8' })
     .filter((f) => f.endsWith('.json'))
+    .map((f) => f.split(sep).join('/'))
     .sort()
   for (const file of files) {
     const suite = JSON.parse(readFileSync(join(SUITE_DIR, file), 'utf8')) as Suite
-    if (only.size > 0 && !only.has(suite.suite)) continue
+    const name = file.slice(0, -'.json'.length)
+    if (only.size > 0 && ![...only].some((o) => name === o || name.startsWith(`${o}/`))) continue
     const requires = suite.requires ?? {}
     const hostRequires = Array.isArray(requires) ? requires : (requires[HOST] ?? [])
     const unmet = hostRequires.filter((r) => !requirementMet(r))
     if (unmet.length > 0) {
       if (strict && suite.optional !== true) {
-        failures.push(
-          `${suite.suite}: unmet requirements ${unmet.join(', ')} (INTEG_RUNTIME_STRICT=1)`,
-        )
+        failures.push(`${name}: unmet requirements ${unmet.join(', ')} (INTEG_RUNTIME_STRICT=1)`)
         failed += 1
       } else {
-        console.log(`skip ${suite.suite} (unmet: ${unmet.join(', ')})`)
+        console.log(`skip ${name} (unmet: ${unmet.join(', ')})`)
         skipped += 1
       }
       continue
@@ -1011,24 +1146,24 @@ async function main(): Promise<number> {
       for (const testCase of variants(listed)) {
         const unmetCase = (testCase.requires ?? []).filter((r) => !requirementMet(r))
         if (unmetCase.length > 0) {
-          if (strict) {
+          if (strict && testCase.optional !== true) {
             failures.push(
-              `${suite.suite}/${testCase.id}: unmet requirements ${unmetCase.join(', ')} (INTEG_RUNTIME_STRICT=1)`,
+              `${name}/${testCase.id}: unmet requirements ${unmetCase.join(', ')} (INTEG_RUNTIME_STRICT=1)`,
             )
             failed += 1
           } else {
-            console.log(`skip ${suite.suite}/${testCase.id} (unmet: ${unmetCase.join(', ')})`)
+            console.log(`skip ${name}/${testCase.id} (unmet: ${unmetCase.join(', ')})`)
           }
           continue
         }
-        const problems = await runCase(suite.suite, testCase)
+        const problems = await runCase(name, testCase)
         if (problems.length > 0) {
           failed += 1
           failures.push(...problems)
-          console.log(`FAIL ${suite.suite}/${testCase.id}`)
+          console.log(`FAIL ${name}/${testCase.id}`)
         } else {
           passed += 1
-          console.log(`ok ${suite.suite}/${testCase.id}`)
+          console.log(`ok ${name}/${testCase.id}`)
         }
       }
     }

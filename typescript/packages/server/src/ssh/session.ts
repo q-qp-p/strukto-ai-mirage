@@ -165,7 +165,7 @@ export class ShellChannel {
     private readonly channel: ServerChannel,
     private readonly request: ChannelRequest,
   ) {
-    this.tty = request.term !== null && request.term !== ''
+    this.tty = request.term !== null
     this.input = new ChannelInput(channel, this.tty)
     this.output = new ChannelOutput(channel, this.tty)
   }

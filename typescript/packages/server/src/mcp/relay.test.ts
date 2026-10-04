@@ -74,3 +74,22 @@ describe('McpRelay', () => {
     })
   })
 })
+
+describe('McpRelay cancel', () => {
+  it("passes a client's cancel on, so the session's next line runs at once", async () => {
+    const { client } = await relayed()
+    const stop = new AbortController()
+    const running = client.callTool(
+      { name: 'shell', arguments: { command: 'sleep 20' } },
+      { signal: stop.signal },
+    )
+    setTimeout(() => {
+      stop.abort()
+    }, 300)
+    await expect(running).rejects.toThrow()
+    const started = Date.now()
+    const after = await client.callTool({ name: 'shell', arguments: { command: 'echo after' } })
+    expect(firstText(after.content)).toBe('after\n')
+    expect(Date.now() - started).toBeLessThan(5000)
+  })
+})

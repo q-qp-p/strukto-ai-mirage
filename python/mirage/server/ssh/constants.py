@@ -40,7 +40,6 @@ PROFILE_OPTION = "mirage-profile"
 # a workspace. It speaks Codex's exec-server protocol: one JSON-RPC
 # message per line, without the `jsonrpc` member.
 CODEX_SUBSYSTEM = "codex-exec"
-MCP_SUBSYSTEM = "mcp"
 CODEX_AGENT_ID = "codex"
 CODEX_SHELL_NAME = "bash"
 CODEX_SHELL_PATH = "/bin/bash"
@@ -59,13 +58,6 @@ CODEX_CTRL_D = b"\x04"
 # interrupt reads as 128 + SIGINT, a terminated process as no status.
 CODEX_INTERRUPTED = 130
 CODEX_TERMINATED = -1
-
-RPC_PARSE_ERROR = -32700
-RPC_INVALID_REQUEST = -32600
-RPC_METHOD_NOT_FOUND = -32601
-RPC_INVALID_PARAMS = -32602
-RPC_INTERNAL_ERROR = -32603
-RPC_NOT_FOUND = -32004
 
 SSH_ENV_KEYS = {
     "ssh_port": ENV_SSH_PORT,

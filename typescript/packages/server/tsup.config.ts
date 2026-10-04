@@ -28,6 +28,7 @@ export default defineConfig({
     'src/ssh/config.ts',
     'src/ssh/constants.ts',
     'src/mcp/index.ts',
+    'src/rpc/index.ts',
   ],
   format: ['esm'],
   dts: {

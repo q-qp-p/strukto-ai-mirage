@@ -16,9 +16,11 @@ import asyncio
 from collections.abc import Mapping
 from typing import Any
 
+import anyio
 from fastapi import FastAPI
 from mcp.server import Server, ServerRequestContext
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE
 from mcp.shared.exceptions import MCPError
 from mcp.types import (
     INVALID_REQUEST,
@@ -27,15 +29,15 @@ from mcp.types import (
     ListToolsResult,
     PaginatedRequestParams,
 )
-from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
-from starlette.types import Receive, Scope, Send
+from starlette.types import Message, Receive, Scope, Send
 
 from mirage import __version__
 from mirage.agents.io_text import io_to_str
 from mirage.agents.tool_operations import MirageToolOperations, ToolResult
+from mirage.server.inflight import InFlight, rpc_messages
 from mirage.server.io_serde import io_result_to_dict
 from mirage.server.jobs import JobStatus, JobTable
 from mirage.server.mcp.server import MirageMcpServer
@@ -53,6 +55,8 @@ class DaemonToolOperations(MirageToolOperations):
     ``shell`` is a job, submitted to the daemon's job table the way
     ``POST /shell`` submits one, so an MCP command is listed by
     ``/v1/jobs``, can be cancelled there, and is recorded like any other.
+    A caller cancelled while it waits (an MCP client's cancel) cancels
+    the job too.
     The other tools run on the workspace's own loop.
 
     Args:
@@ -98,7 +102,12 @@ class DaemonToolOperations(MirageToolOperations):
             factory=run,
             session_id=self._session,
         )
-        job = await self._jobs.wait(job.id)
+        try:
+            job = await self._jobs.wait(job.id)
+        except asyncio.CancelledError:
+            with anyio.CancelScope(shield=True):
+                await self._jobs.cancel(job.id)
+            raise
         if job.status == JobStatus.CANCELED:
             return ToolResult("job canceled", True)
         if job.status == JobStatus.FAILED or not answers:
@@ -130,9 +139,7 @@ class McpDoor:
     picks its session. One tool table per workspace and live session outlives
     the requests, so the read one request stamps guards the edit the next
     one makes. The SDK's session manager starts on the first request, so
-    the app serves MCP with or without ASGI lifespan events. ``app``
-    serves the same route with no auth in front, for a door that already
-    admitted its caller: the SSH relay.
+    the app serves MCP with or without ASGI lifespan events.
 
     Args:
         registry (WorkspaceRegistry): the daemon's workspaces.
@@ -142,9 +149,6 @@ class McpDoor:
     def __init__(self, registry: WorkspaceRegistry, jobs: JobTable) -> None:
         self._registry = registry
         self._jobs = jobs
-        self.app = Starlette(
-            routes=[Route(MCP_PATH, self, methods=["GET", "POST", "DELETE"])]
-        )
         self._served: dict[
             tuple[str, str],
             tuple[
@@ -166,18 +170,165 @@ class McpDoor:
         self._ready = asyncio.Event()
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        self.inflight = InFlight()
 
     async def __call__(
         self, scope: Scope, receive: Receive, send: Send
     ) -> None:
+        """Serve one MCP request over streamable HTTP.
+
+        The endpoint is stateless, so it has no stream for the server to
+        push on: ``GET`` answers 405, as ``DELETE`` does, the same on
+        both hosts.
+
+        Args:
+            scope (Scope): the ASGI scope.
+            receive (Receive): the ASGI receive channel.
+            send (Send): the ASGI send channel.
+        """
+        if scope["method"] == "GET":
+            refused = JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32000,
+                        "message": "Method not allowed.",
+                    },
+                    "id": None,
+                },
+                status_code=405,
+            )
+            await refused(scope, receive, send)
+            return
+        request = Request(scope, receive)
+        workspace_id = request.path_params["workspace_id"]
         try:
-            await self._target(Request(scope, receive))
+            served = await self._served_for(
+                workspace_id, request.query_params.get("session_id")
+            )
         except LookupError as exc:
             response = JSONResponse({"detail": exc.args[0]}, status_code=404)
             await response(scope, receive, send)
             return
         await self._start()
-        await self._manager.handle_request(scope, receive, send)
+        if scope["method"] != "POST":
+            await self._manager.handle_request(scope, receive, send)
+            return
+        received = bytearray()
+        async for chunk in request.stream():
+            received += chunk
+            if len(received) > DEFAULT_MAX_REQUEST_BODY_SIZE:
+                response = JSONResponse(
+                    {"detail": "request body too large"}, status_code=413
+                )
+                await response(scope, receive, send)
+                return
+        body = bytes(received)
+        session_id = served[1].session_id
+        calls = []
+        for message in rpc_messages(body):
+            params = message.get("params")
+            if message.get("method") == "notifications/cancelled":
+                if isinstance(params, dict):
+                    self.inflight.cancel(
+                        InFlight.key(
+                            workspace_id, session_id, params.get("requestId")
+                        )
+                    )
+            elif message.get("method") == "tools/call" and "id" in message:
+                calls.append(
+                    InFlight.key(workspace_id, session_id, message["id"])
+                )
+        await self._handle(scope, receive, send, body, calls)
+
+    async def _handle(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        body: bytes,
+        calls: list[str],
+    ) -> None:
+        """Hand a POST to the SDK, cancellable while its calls run.
+
+        The body is read already, so it is replayed to the SDK. A tool
+        call is held in ``inflight`` until it settles, so a client's
+        ``notifications/cancelled`` on another request reaches it, and
+        a caller that drops the request cancels it too.
+
+        Args:
+            scope (Scope): the ASGI scope.
+            receive (Receive): the ASGI receive, past the body.
+            send (Send): the ASGI send.
+            body (bytes): the request body.
+            calls (list[str]): the in-flight keys of its tool calls.
+        """
+        replayed = False
+        started = False
+        finished = False
+
+        async def replay() -> Message:
+            nonlocal replayed
+            if replayed:
+                return await receive()
+            replayed = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        if not calls:
+            await self._manager.handle_request(scope, replay, send)
+            return
+
+        async def tracked(message: Message) -> None:
+            nonlocal started, finished
+            if message["type"] == "http.response.start":
+                started = True
+            if message["type"] == "http.response.body" and not message.get(
+                "more_body", False
+            ):
+                finished = True
+            await send(message)
+
+        held = asyncio.Event()
+
+        async def hold() -> Message:
+            nonlocal replayed
+            if replayed:
+                await held.wait()
+                return {"type": "http.disconnect"}
+            replayed = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        task = asyncio.ensure_future(
+            self._manager.handle_request(scope, hold, tracked)
+        )
+
+        async def caller_gone() -> None:
+            while (await receive())["type"] != "http.disconnect":
+                pass
+            if not finished:
+                task.cancel()
+
+        for call in calls:
+            self.inflight.add(call, task.cancel)
+        watcher = asyncio.ensure_future(caller_gone())
+        try:
+            await task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+            if finished:
+                return
+            if not started:
+                await send({"type": "http.response.start", "status": 204})
+            await send(
+                {"type": "http.response.body", "body": b"", "more_body": False}
+            )
+        finally:
+            held.set()
+            watcher.cancel()
+            for call in calls:
+                self.inflight.discard(call, task.cancel)
 
     async def _start(self) -> None:
         if self._task is None:
@@ -206,8 +357,8 @@ class McpDoor:
 
         One table per workspace and live session, shared by every door
         that serves the tools (this endpoint, the HTTP tool routes, the
-        CLI and SSH through them), so a read through one door stamps
-        the file for an edit through another.
+        RPC endpoint and the CLI through them), so a read through one
+        door stamps the file for an edit through another.
 
         Args:
             workspace_id (str): the workspace.

@@ -39,6 +39,21 @@ MAX_BUFFERED = 1024 * 1024
 MAX_LINE = 1024 * 1024
 MAX_TERMINAL_LINE = 1024
 
+TAB = 0x09
+LF = 0x0A
+CR = 0x0D
+BS = 0x08
+BEL = 0x07
+DEL = 0x7F
+ETX = 0x03
+EOT = 0x04
+NAK = 0x15
+ESC = 0x1B
+CSI_START = 0x5B
+SS3_START = 0x4F
+ERASE = b"\b \b"
+NEWLINE = b"\r\n"
+
 Send = Callable[[bytes, bool], Awaitable[None]]
 
 
@@ -48,6 +63,133 @@ class Mark(Enum):
     EOF = "eof"
     INTERRUPT = "interrupt"
     LIMIT = "limit"
+
+
+class _EscapeState(Enum):
+    NONE = "none"
+    START = "start"
+    CSI = "csi"
+    SS3 = "ss3"
+
+
+def edited(process: asyncssh.SSHServerProcess[str]) -> bool:
+    """Whether asyncssh's line editor runs on the channel.
+
+    It runs only for a pty with a terminal type; a pty requested
+    without one (the client's ``TERM`` unset) gets ``LineDiscipline``.
+
+    Args:
+        process (asyncssh.SSHServerProcess[str]): the channel's process.
+
+    Returns:
+        bool: True when asyncssh edits the channel's input.
+    """
+    return bool(process.term_type)
+
+
+class LineDiscipline:
+    """The cooked-mode line discipline a pty gives a shell.
+
+    Echo, erase (Backspace, Ctrl-U), Enter, Ctrl-C and Ctrl-D, with
+    escape sequences such as arrow keys swallowed. asyncssh's line
+    editor does this for a pty with a terminal type; a pty without one
+    gets this small one, the one the TypeScript server always uses.
+
+    Args:
+        echo (Callable[[bytes], None]): writes the echo to the client.
+        line (Callable[[bytes], None]): takes each entered line, with
+            its newline.
+        interrupt (Callable[[], None]): called for Ctrl-C.
+        eof (Callable[[], None]): called for Ctrl-D on an empty line.
+    """
+
+    def __init__(
+        self,
+        echo: Callable[[bytes], None],
+        line: Callable[[bytes], None],
+        interrupt: Callable[[], None],
+        eof: Callable[[], None],
+    ) -> None:
+        self._echo = echo
+        self._take_line = line
+        self._interrupt = interrupt
+        self._eof = eof
+        self._line = bytearray()
+        self._echoed = bytearray()
+        self._escape = _EscapeState.NONE
+        self._after_cr = False
+
+    def feed(self, chunk: bytes) -> None:
+        """Take bytes the client typed, then echo what they showed.
+
+        Args:
+            chunk (bytes): the input.
+        """
+        for b in chunk:
+            self._byte(b)
+        if self._echoed:
+            data = bytes(self._echoed)
+            self._echoed.clear()
+            self._echo(data)
+
+    def _byte(self, b: int) -> None:
+        was_cr = self._after_cr
+        self._after_cr = False
+        if self._escape is not _EscapeState.NONE:
+            self._skip_escape(b)
+        elif b == CR:
+            self._enter()
+            self._after_cr = True
+        elif b == LF:
+            if not was_cr:
+                self._enter()
+        elif b in (BS, DEL):
+            self._erase()
+        elif b == NAK:
+            while self._line:
+                self._erase()
+        elif b == ETX:
+            self._line.clear()
+            self._interrupt()
+        elif b == EOT:
+            if not self._line:
+                self._eof()
+        elif b == ESC:
+            self._escape = _EscapeState.START
+        elif b < 0x20 and b != TAB:
+            return
+        elif len(self._line) >= MAX_TERMINAL_LINE:
+            self._echoed.append(BEL)
+        else:
+            self._line.append(b)
+            self._echoed.append(b)
+
+    def _enter(self) -> None:
+        self._echoed += NEWLINE
+        self._line.append(LF)
+        data = bytes(self._line)
+        self._line.clear()
+        self._take_line(data)
+
+    def _erase(self) -> None:
+        if not self._line:
+            return
+        while len(self._line) > 1 and self._line[-1] & 0xC0 == 0x80:
+            self._line.pop()
+        self._line.pop()
+        self._echoed += ERASE
+
+    def _skip_escape(self, b: int) -> None:
+        if self._escape is _EscapeState.START:
+            self._escape = (
+                _EscapeState.CSI
+                if b == CSI_START
+                else _EscapeState.SS3
+                if b == SS3_START
+                else _EscapeState.NONE
+            )
+        elif self._escape is _EscapeState.SS3 or 0x40 <= b <= 0x7E:
+            self._escape = _EscapeState.NONE
 
 
 def encode(text: str) -> bytes:
@@ -64,9 +206,10 @@ class ChannelInput:
     One pump task reads the channel into a buffer, so the prompt and the
     running line's stdin draw from a single ordered stream (typeahead
     survives a command that did not read it), and an interrupt is seen
-    even while nothing is reading. Ctrl-D from asyncssh's line editor
-    ends input for one reader, as a terminal's does; the channel's own
-    EOF ends it for good.
+    even while nothing is reading. Ctrl-D from the line editor ends
+    input for one reader, as a terminal's does; the channel's own EOF
+    ends it for good. A pty asyncssh does not edit is cooked by a
+    ``LineDiscipline`` here.
 
     Args:
         process (asyncssh.SSHServerProcess[str]): the channel's process.
@@ -89,6 +232,16 @@ class ChannelInput:
         self._room.set()
         self._interrupt: Callable[[], None] | None = None
         self._task: asyncio.Task[None] | None = None
+        self._discipline = (
+            LineDiscipline(
+                self._echo,
+                self._push,
+                self._interrupted,
+                lambda: self._push(Mark.EOF),
+            )
+            if process.term_type is not None and not edited(process)
+            else None
+        )
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._pump())
@@ -129,7 +282,10 @@ class ChannelInput:
             except (asyncssh.Error, OSError) as exc:
                 logger.debug("ssh: channel input ended: %r", exc)
                 break
-            if data:
+            if data and self._discipline is not None:
+                self._discipline.feed(encode(data))
+                await self._process.stdout.drain()
+            elif data:
                 self._push(encode(data))
             elif stdin.at_eof():
                 break
@@ -138,12 +294,15 @@ class ChannelInput:
         self._closed = True
         self._changed.set()
 
+    def _echo(self, data: bytes) -> None:
+        self._process.stdout.write(decode(data))
+
     def _interrupted(self) -> None:
         if self._interrupt is not None:
             self._interrupt()
             return
         chan = self._process.channel
-        if isinstance(chan, SSHLineEditorChannel):
+        if edited(self._process) and isinstance(chan, SSHLineEditorChannel):
             chan.clear_input()
         self._push(Mark.INTERRUPT)
 
@@ -230,7 +389,8 @@ class ChannelOutput:
 
     On a terminal stderr folds into stdout, as a pty points both
     descriptors at one device; asyncssh's line editor then turns each
-    newline into CRLF and redraws the input line around the output.
+    newline into CRLF and redraws the input line around the output,
+    and on a pty it does not edit, each newline goes out as CRLF here.
 
     Args:
         process (asyncssh.SSHServerProcess[str]): the channel's process.
@@ -242,6 +402,7 @@ class ChannelOutput:
     ) -> None:
         self._process = process
         self._tty = tty
+        self._crlf = tty and not edited(process)
 
     async def write(self, data: bytes, stderr: bool = False) -> None:
         stream = (
@@ -249,38 +410,10 @@ class ChannelOutput:
             if stderr and not self._tty
             else self._process.stdout
         )
+        if self._crlf:
+            data = data.replace(b"\n", b"\r\n")
         stream.write(decode(data))
         await stream.drain()
-
-
-class LoopStdin:
-    """A channel's input as a line's stdin, pulled from the workspace loop.
-
-    The line runs on the workspace runner's loop while the channel lives
-    on the daemon's, so each pull hops to the daemon loop for the next
-    buffered chunk and waits there.
-
-    Args:
-        source (ChannelInput): the channel's input.
-        loop (asyncio.AbstractEventLoop): the loop the channel lives on.
-    """
-
-    def __init__(
-        self, source: ChannelInput, loop: asyncio.AbstractEventLoop
-    ) -> None:
-        self._source = source
-        self._loop = loop
-
-    def __aiter__(self) -> "LoopStdin":
-        return self
-
-    async def __anext__(self) -> bytes:
-        data = await asyncio.wrap_future(
-            asyncio.run_coroutine_threadsafe(self._source.read(), self._loop)
-        )
-        if not data:
-            raise StopAsyncIteration
-        return data
 
 
 def loop_sender(
