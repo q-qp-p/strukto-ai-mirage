@@ -15,12 +15,13 @@
 import { materialize } from '../../../../io/types.ts'
 import { concat } from '../../../../io/cachable_iterator.ts'
 import type { FlagView } from '../../../spec/flag_view.ts'
-import type { CLIDoors, CLIVerbFn } from '../../types.ts'
+import type { CLIDoors, CLIInvocation, CLIVerbFn } from '../../types.ts'
 import { discover, requireWorkTree } from './discover.ts'
 import { IndexLockError, NoWorkspaceError } from './errors.ts'
 import { configValues } from './fs.ts'
 import { openRepo, type Repo } from './repo.ts'
 import type { ReadOnlyRefusal, RepoLocation } from './types.ts'
+import { rstripSlash } from '../../../../utils/slash.ts'
 import { fatal, gitBool, startPoint } from './util.ts'
 import { isErofs } from '../../../../utils/errors.ts'
 import type { CommandFnResult } from '../../../config.ts'
@@ -53,6 +54,26 @@ export const indexLocked: ReadOnlyRefusal = (_inv, location) =>
  * @param refused the refusal git gives the verb on a read-only filesystem, null
  *   for a verb that only reads
  */
+/**
+ * Whether a write a read-only mount refused is one git is refused first, on the
+ * lock in its own directory. git takes that lock before it touches anything
+ * else, so a refused write on the mount holding the git directory, or before
+ * any repository was opened (clone and init make their directory first), is
+ * git's lock refusal. One elsewhere, a work tree on a read-only mount of its
+ * own, is not, and keeps its own error.
+ */
+function gitWouldRefuse(
+  inv: CLIInvocation,
+  location: RepoLocation | null,
+  path: string | undefined,
+): boolean {
+  if (location === null || path === undefined || path === '') return true
+  const root = inv.doors?.ns?.mounts?.rootOf(location.commondir) ?? '/'
+  return [root, location.gitdir].some(
+    (base) => path === base || path.startsWith(`${rstripSlash(base)}/`),
+  )
+}
+
 export function verb(fn: CLIVerbFn, refused: ReadOnlyRefusal | null = null): CLIVerbFn {
   return async (inv) => {
     if (inv.doors === undefined) return await fn(inv)
@@ -63,8 +84,10 @@ export function verb(fn: CLIVerbFn, refused: ReadOnlyRefusal | null = null): CLI
     try {
       result = await fn({ ...inv, doors })
     } catch (err) {
-      if (refused === null || !isErofs(err)) throw err
-      result = fatal(refused(inv, LOCATIONS.get(doors) ?? null))
+      const location = LOCATIONS.get(doors) ?? null
+      const path = (err as { virtualPath?: string }).virtualPath
+      if (refused === null || !isErofs(err) || !gitWouldRefuse(inv, location, path)) throw err
+      result = fatal(refused(inv, location))
     }
     if (result === null || lines.length === 0) return result
     const [out, io] = result

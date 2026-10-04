@@ -35,6 +35,8 @@ git tag v1 HEAD~1
 git tag -a v2 -m 'release two'
 git branch dup HEAD~1
 git tag -a dup -m 'tagged dup'
+git tag twin-a "$(printf '195\n' | git hash-object -w --stdin)"
+git tag twin-b "$(printf '389\n' | git hash-object -w --stdin)"
 printf 'ignored\n' > debug.log
 mkdir cache empty
 printf 'ignored\n' > cache/file

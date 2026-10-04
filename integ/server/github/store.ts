@@ -1133,11 +1133,23 @@ export interface Divergence {
 
 // Both sides are every commit reachable through any parent, as reachableFrom
 // lists them, so a branch merged into the base reads as behind it, or as
-// identical, never as diverged from it.
+// identical, never as diverged from it. The merge base is a commit both reach
+// that no other such commit reaches, as git's is: dates alone can list an
+// older shared ancestor first, and commits made in one second all tie.
 export function divergence(head: CommitRow[], base: CommitRow[]): Divergence | null {
   const onBase = new Set(base.map((c) => c.sha))
   const onHead = new Set(head.map((c) => c.sha))
-  const mergeBase = head.find((c) => onBase.has(c.sha))
+  const shared = head.filter((c) => onBase.has(c.sha))
+  const byId = new Map(head.map((c) => [c.sha, c]))
+  const below = new Set<string>()
+  const pending = shared.flatMap(parentsOf)
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    if (below.has(at)) continue
+    below.add(at)
+    const row = byId.get(at)
+    if (row !== undefined) pending.push(...parentsOf(row))
+  }
+  const mergeBase = shared.find((c) => !below.has(c.sha))
   if (mergeBase === undefined) return null
   return {
     ahead: head.filter((c) => !onBase.has(c.sha)),

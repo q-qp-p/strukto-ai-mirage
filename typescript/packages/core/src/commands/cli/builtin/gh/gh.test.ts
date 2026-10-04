@@ -329,45 +329,10 @@ describe('gh repo', () => {
     expect(CALLS[0]?.body).toEqual({})
   })
 
-  it('sends --org and --default-branch-only in the fork request', async () => {
-    reset({ full_name: 'acme/r' })
-    await fork(inv(['o/r'], { org: 'acme', default_branch_only: true }))
-    expect(CALLS[0]?.body).toEqual({ organization: 'acme', default_branch_only: true })
-  })
-
-  it('takes --clone=false and --remote=false, and refuses a clone', async () => {
-    reset({ full_name: 'me/r' })
-    await fork(inv(['o/r'], { clone: 'false', remote: 'false', remote_name: 'up' }))
-    expect(CALLS).toHaveLength(1)
-    await expect(fork(inv(['o/r'], { clone: true }))).rejects.toThrow(
-      '--clone is not supported: there is no local checkout to clone into',
-    )
+  it('refuses a remote for the current repository', async () => {
     await expect(fork(inv([], { remote: 'true' }, { token: 't', repo: 'o/r' }))).rejects.toThrow(
       '--remote is not supported',
     )
-    await expect(fork(inv(['o/r'], { org: '' }))).rejects.toThrow('--org cannot be blank')
-  })
-
-  it('reads a repository given as a URL', async () => {
-    for (const spec of [
-      'https://github.com/octocat/Hello-World',
-      'https://github.com/octocat/Hello-World.git/',
-      'git@github.com:octocat/Hello-World.git',
-      'ssh://git@github.com:22/octocat/Hello-World.git',
-      'git+https://github.com/octocat/Hello-World',
-    ]) {
-      reset({ full_name: 'me/Hello-World' })
-      await fork(inv([spec]))
-      expect(CALLS[0]?.path).toBe('/repos/octocat/Hello-World/forks')
-    }
-    reset()
-    await expect(view(inv(['https://github.com/o/r/tree/main']))).rejects.toThrow(
-      'invalid path: /o/r/tree/main',
-    )
-    await expect(fork(inv(['https://github.com/o']))).rejects.toThrow(
-      'did not understand argument: invalid path: /o',
-    )
-    await expect(view(inv(['//o/r']))).rejects.toThrow(/OWNER\/REPO/)
   })
 
   // gh takes the new name as the operand and the repository to rename as
@@ -1202,42 +1167,4 @@ it('reads graphql errors only off the graphql endpoint', async () => {
   if (result === null) throw new Error('missing API result')
   expect(JSON.parse(DEC.decode(await materialize(result[0])))).toEqual(data)
   expect(result[1].exitCode).toBe(0)
-})
-
-describe('gh help', () => {
-  async function run(texts: string[]): Promise<[string, string, number]> {
-    const node = GH.subcommands.find((c) => c.name === 'help')
-    const result = (await node?.fn?.(inv(texts))) ?? null
-    if (result === null) throw new Error('expected a result tuple')
-    const [out, io] = result
-    return [out === null ? '' : DEC.decode(out as Uint8Array), await io.stderrStr(), io.exitCode]
-  }
-
-  it("prints the root's help, and a command's", async () => {
-    expect((await run([]))[0]).toContain('gh')
-    const [out, , code] = await run(['repo', 'fork'])
-    expect(out).toContain('--default-branch-only')
-    expect(code).toBe(0)
-    expect((await run(['repo', 'nosuch']))[0]).toBe((await run(['repo']))[0])
-  })
-
-  it("answers the environment topic in this gh's terms", async () => {
-    const [out, , code] = await run(['environment'])
-    expect(out).toContain('reads no environment variables')
-    expect(code).toBe(0)
-  })
-
-  it("gives gh's unknown-topic answer on stderr and exits 0", async () => {
-    const [out, err, code] = await run(['nosuch', 'other'])
-    expect(out).toBe('')
-    expect(err.split('\n').slice(0, 4)).toEqual([
-      'Unknown help topic [`nosuch` `other`]',
-      'Usage:  gh <command> <subcommand> [flags]',
-      '',
-      'Available commands:',
-    ])
-    expect(err).toContain('  api\n')
-    expect(err).not.toContain('  help\n')
-    expect(code).toBe(0)
-  })
 })

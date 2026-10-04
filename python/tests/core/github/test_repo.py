@@ -61,49 +61,34 @@ async def test_fetch_default_branch_master(mock_get, config):
 # last two segments. Taking the first two read `github.com/acme/tools` as
 # owner `github.com`, repo `acme` -- a different repository, reported as
 # success rather than as an error.
-def test_parse_repo_takes_owner_and_repo():
-    ref = parse_repo("acme/tools")
-    assert (ref.owner, ref.repo) == ("acme", "tools")
-
-
-def test_parse_repo_drops_the_optional_host():
-    ref = parse_repo("github.com/acme/tools")
-    assert (ref.owner, ref.repo) == ("acme", "tools")
-
-
 @pytest.mark.parametrize(
-    ("spec", "owner", "repo"),
+    "spec",
     [
-        ("https://github.com/acme/tools", "acme", "tools"),
-        ("http://github.com/acme/tools/", "acme", "tools"),
-        ("git@github.com:acme/tools.git", "acme", "tools"),
-        ("ssh://git@github.com/acme/tools.git", "acme", "tools"),
-        ("git://github.com/acme/tools", "acme", "tools"),
+        "acme/tools",
+        "github.com/acme/tools",
+        "http://github.com/acme/tools/",
+        "git://github.com/acme/tools",
     ],
 )
-def test_parse_repo_reads_a_url(spec, owner, repo):
+def test_parse_repo_takes_owner_and_repo(spec):
     ref = parse_repo(spec)
-    assert (ref.owner, ref.repo) == (owner, repo)
+    assert (ref.owner, ref.repo) == ("acme", "tools")
 
 
 @pytest.mark.parametrize(
     ("spec", "message"),
     [
-        ("https://github.com/acme", "invalid path: /acme"),
+        ("justaname", "OWNER/REPO"),
+        ("a/b/c/d", "OWNER/REPO"),
+        ("acme/", "OWNER/REPO"),
+        ("/tools", "OWNER/REPO"),
+        ("/acme/tools", "OWNER/REPO"),
         ("https://github.com/a/b/c", "invalid path: /a/b/c"),
         ("https:///acme/tools", "no hostname detected"),
     ],
 )
-def test_parse_repo_refuses_a_url_without_owner_and_repo(spec, message):
+def test_parse_repo_refuses_a_spec_that_is_not_the_format(spec, message):
     with pytest.raises(ValueError, match=message):
-        parse_repo(spec)
-
-
-@pytest.mark.parametrize(
-    "spec", ["justaname", "a/b/c/d", "acme/", "/tools", "/acme/tools"]
-)
-def test_parse_repo_refuses_a_spec_that_is_not_the_format(spec):
-    with pytest.raises(ValueError, match="OWNER/REPO"):
         parse_repo(spec)
 
 

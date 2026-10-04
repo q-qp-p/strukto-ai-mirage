@@ -589,3 +589,6 @@ export const HELP_TOPICS: Record<string, string> = {
     '- If the command line is refused before the command runs, such as for an unknown flag,\n' +
     '  the exit code will be 2\n',
 }
+
+export const GITHUB_HOST = 'github.com'
+export const CONNECT_HINT = 'check your internet connection or https://githubstatus.com'

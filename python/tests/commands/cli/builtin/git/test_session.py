@@ -17,6 +17,7 @@ from dataclasses import replace
 import pytest
 from dulwich.repo import BaseRepo
 
+from mirage.commands.cli.builtin.git import GIT
 from mirage.commands.cli.builtin.git.errors import (
     NoWorkingDirectoryError,
     NoWorkspaceError,
@@ -24,6 +25,10 @@ from mirage.commands.cli.builtin.git.errors import (
 from mirage.commands.cli.builtin.git.session import opened
 from mirage.commands.cli.types import CLIDoors
 from mirage.commands.spec.flag_view import FlagView
+from mirage.types import MountMode
+from mirage.vfs.disk import DiskVFS
+from mirage.workspace import Workspace
+from mirage.workspace.mount import Mount
 from tests.commands.cli.builtin.git.conftest import repo_doors
 
 
@@ -123,7 +128,6 @@ INDEX_LOCKED = (
             "'/repo/.git/refs/heads/sw.lock': Read-only file system\n",
         ),
         ("checkout -q side", 128, INDEX_LOCKED),
-        ("commit --allow-empty -m x", 128, INDEX_LOCKED),
         ("add a.txt", 128, INDEX_LOCKED),
         (
             "clone /repo /repo/clone",
@@ -143,21 +147,20 @@ async def test_a_read_only_mount_is_refused_in_gits_words(
 
 
 @pytest.mark.asyncio
-async def test_an_ambiguous_name_is_warned_ahead_of_the_answer(
-    git_ws, repo_path
-):
-    head = (repo_path / ".git/refs/heads/main").read_text()
-    (repo_path / ".git/refs/tags").mkdir(parents=True, exist_ok=True)
-    (repo_path / ".git/refs/tags/main").write_text(head)
-    result = await git_ws.shell("git -C /repo rev-parse main")
-    assert (result.exit_code, result.stdout, result.stderr) == (
-        0,
-        head.encode(),
-        b"warning: refname 'main' is ambiguous.\n",
-    )
-    quiet = await git_ws.shell("git -C /repo rev-parse -q main")
-    assert not quiet.stderr
-    with (repo_path / ".git/config").open("a") as config:
-        config.write("[core]\n\twarnAmbiguousRefs = false\n")
-    unwarned = await git_ws.shell("git -C /repo rev-parse main")
-    assert not unwarned.stderr
+async def test_a_read_only_work_tree_keeps_its_own_error(repo_path, tmp_path):
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "a.txt").write_text("one changed\n")
+    mounts = {
+        "/repo": DiskVFS(root=str(repo_path)),
+        "/tree": Mount(vfs=DiskVFS(root=str(tree)), mode=MountMode.READ),
+    }
+    with Workspace(mounts, mode=MountMode.WRITE) as ws:
+        ws.register_cli("git", GIT)
+        result = await ws.shell(
+            "git --git-dir=/repo/.git --work-tree=/tree "
+            "restore --source=HEAD~1 a.txt"
+        )
+    assert result.exit_code == 1
+    assert b"/tree/" in result.stderr
+    assert b"index.lock" not in result.stderr

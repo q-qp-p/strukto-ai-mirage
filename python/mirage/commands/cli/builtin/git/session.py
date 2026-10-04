@@ -29,7 +29,12 @@ from mirage.commands.cli.builtin.git.errors import (
 )
 from mirage.commands.cli.builtin.git.repo import config_values, open_repo
 from mirage.commands.cli.builtin.git.types import ReadOnlyRefusal, RepoLocation
-from mirage.commands.cli.builtin.git.util import fatal, git_bool, start_point
+from mirage.commands.cli.builtin.git.util import (
+    fatal,
+    git_bool,
+    mounts_of,
+    start_point,
+)
 from mirage.commands.cli.types import CLIDoors, CLIInvocation
 from mirage.commands.spec.flag_view import FlagView
 from mirage.io.types import ByteSource, IOResult, materialize
@@ -54,6 +59,33 @@ def index_locked(
         location (RepoLocation | None): the repository it opened.
     """
     return IndexLockError(location.gitdir if location is not None else ".git")
+
+
+def git_would_refuse(
+    inv: CLIInvocation[None], location: RepoLocation | None, path: str | None
+) -> bool:
+    """Whether a write a read-only mount refused is one git is refused
+    first, on the lock in its own directory.
+
+    git takes that lock before it touches anything else, so a refused
+    write on the mount holding the git directory, or before any
+    repository was opened (clone and init make their directory first),
+    is git's lock refusal. One elsewhere, a work tree on a read-only
+    mount of its own, is not, and keeps its own error.
+
+    Args:
+        inv (CLIInvocation[None]): the line's invocation record.
+        location (RepoLocation | None): the repository it opened.
+        path (str | None): where the refused write went.
+    """
+    if location is None or not path:
+        return True
+    mounts = mounts_of(inv.doors or CLIDoors())
+    root = "/" if mounts is None else mounts.root_of(location.commondir)
+    return any(
+        path == base or path.startswith(f"{base.rstrip('/')}/")
+        for base in (root, location.gitdir)
+    )
 
 
 def verb(
@@ -90,9 +122,14 @@ def verb(
             try:
                 out, io = await fn(inv)
             except OSError as exc:
-                if refused is None or exc.errno != errno.EROFS:
+                location = LOCATIONS.get()
+                if (
+                    refused is None
+                    or exc.errno != errno.EROFS
+                    or not git_would_refuse(inv, location, exc.filename)
+                ):
                     raise
-                out, io = fatal(refused(inv, LOCATIONS.get()))
+                out, io = fatal(refused(inv, location))
         finally:
             AMBIGUOUS.reset(warned)
             LOCATIONS.reset(placed)

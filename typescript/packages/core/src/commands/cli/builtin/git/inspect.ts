@@ -19,6 +19,7 @@ import {
   SingleRevisionError,
 } from './errors.ts'
 import { parseFlags, refCommits, select } from './history.ts'
+import { uniqueAbbreviations } from './ref_list.ts'
 import { configBool, repoArgs } from './repo.ts'
 import { opened } from './session.ts'
 import { configLines } from './fs.ts'
@@ -369,7 +370,11 @@ export async function revParse(inv: CLIInvocation): Promise<CommandFnResult> {
         break
       }
       if (mode === undefined) {
-        shown.push(`${short === undefined ? oid : oid.slice(0, width)}\n`)
+        const unique =
+          short === undefined
+            ? oid.length
+            : ((await uniqueAbbreviations(repo, new Map([[oid, width]]))).get(oid) ?? width)
+        shown.push(`${oid.slice(0, unique)}\n`)
         continue
       }
       const [line, error] = await abbreviated(

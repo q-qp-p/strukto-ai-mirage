@@ -15,6 +15,7 @@
 import { GitHubApiError, type GitHubTransport } from './client.ts'
 import { GRAPHQL_PATH } from './constants.ts'
 import { decodeBase64 } from '../../utils/base64.ts'
+import { stripSlash } from '../../utils/slash.ts'
 import { githubPages } from './paginate.ts'
 
 export interface RepoRef {
@@ -29,12 +30,10 @@ const URL_PREFIXES = ['git@', 'ssh:', 'git+ssh:', 'git:', 'http:', 'git+https:',
 const PROTOCOLS = [...URL_PREFIXES.slice(1), 'ftp:', 'ftps:', 'file:']
 
 /**
- * A repository named by URL, read as go-gh's ParseURL and RepoInfoFromURL
- * read it: `git@HOST:OWNER/REPO.git` is scp syntax for `ssh://`, the path must
- * be exactly two segments once its slashes are trimmed, and `.git` comes off
- * the name.
+ * A repository URL as go-gh's ParseURL reads it: `git@HOST:OWNER/REPO.git` is
+ * scp syntax for `ssh://`, and a URL with no host is refused.
  */
-function repoFromUrl(spec: string): RepoRef {
+function urlOf(spec: string): URL {
   let raw = spec
   if (
     !PROTOCOLS.some((prefix) => raw.startsWith(prefix)) &&
@@ -49,9 +48,26 @@ function repoFromUrl(spec: string): RepoRef {
     throw new Error('no hostname detected')
   }
   if (url.hostname === '') throw new Error('no hostname detected')
+  return url
+}
+
+/** The host a repository argument names, null for `OWNER/REPO`. */
+export function repoHost(spec: string): string | null {
+  if (URL_PREFIXES.some((prefix) => spec.startsWith(prefix))) return urlOf(spec).hostname
+  const parts = spec.split('/')
+  return parts.length === 3 ? (parts[0] ?? '').toLowerCase() : null
+}
+
+/**
+ * A repository named by URL, read as go-gh's ParseURL and RepoInfoFromURL
+ * read it: the path must be exactly two segments once its slashes are
+ * trimmed, and `.git` comes off the name.
+ */
+function repoFromUrl(spec: string): RepoRef {
+  const url = urlOf(spec)
   let path = url.pathname
   if (url.protocol === 'ssh:' && path.startsWith('//')) path = path.slice(1)
-  const parts = path.replace(/^\/+|\/+$/g, '').split('/')
+  const parts = stripSlash(path).split('/')
   const [owner, name] = parts
   if (parts.length !== 2 || owner === undefined || name === undefined) {
     throw new Error(`invalid path: ${path}`)

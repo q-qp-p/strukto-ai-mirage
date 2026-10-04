@@ -2398,11 +2398,11 @@
       "targets": [
         "cli-gh"
       ],
-      "command": "gh repo view https://github.com/integ/repo-cli --json nameWithOwner --jq .nameWithOwner; gh repo view git@github.com:integ/repo-cli.git --json nameWithOwner --jq .nameWithOwner; gh release list -R ssh://git@github.com/integ/repo-cli.git --json tagName --jq length; gh repo view https://github.com/integ/repo-cli/tree/main",
+      "command": "gh repo view https://github.com/integ/repo-cli --json nameWithOwner --jq .nameWithOwner; gh repo view git@github.com:integ/repo-cli.git --json nameWithOwner --jq .nameWithOwner; gh release list -R ssh://git@github.com/integ/repo-cli.git --json tagName --jq length; gh repo view https://github.com/integ/repo-cli/tree/main; gh repo view www.github.com/integ/repo-cli --json nameWithOwner --jq .nameWithOwner; gh repo view https://gitlab.com/integ/repo-cli; gh issue view https://gitlab.com/integ/repo-cli/issues/1",
       "expect": {
         "exit": 1,
-        "stdout": "integ/repo-cli\ninteg/repo-cli\n2\n",
-        "stderr": "gh repo view: invalid path: /integ/repo-cli/tree/main\n"
+        "stdout": "integ/repo-cli\ninteg/repo-cli\n2\ninteg/repo-cli\n",
+        "stderr": "gh repo view: invalid path: /integ/repo-cli/tree/main\ngh repo view: error connecting to gitlab.com\ncheck your internet connection or https://githubstatus.com\ngh issue view: error connecting to gitlab.com\ncheck your internet connection or https://githubstatus.com\n"
       }
     },
     {

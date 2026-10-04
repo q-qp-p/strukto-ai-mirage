@@ -44,6 +44,7 @@ from mirage.commands.cli.builtin.git.reflog import ZERO, append, entry, logged
 from mirage.commands.cli.builtin.git.refs import (
     SYMREF_PREFIX,
     blocking_ref,
+    delete_ref,
     load_refs,
     raw_ref,
     resolve_symbolic,
@@ -235,7 +236,7 @@ async def symbolic_ref(
             if name == HEAD:
                 raise DeleteHeadError()
             owner = owner_of(location, name)
-            await remove_file(dispatch, posixpath.join(owner, name))
+            await delete_ref(dispatch, owner, name)
             await remove_file(dispatch, posixpath.join(owner, LOGS_DIR, name))
             return None, IOResult()
         if len(names) == 2:

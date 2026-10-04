@@ -1572,6 +1572,55 @@ async function mergeHistory(at: string): Promise<void> {
     [field(behind, 'status'), field(behind, 'ahead_by'), field(behind, 'behind_by')],
     ['behind', 0, 2],
   )
+  const sameSecond = { name: 'Tie', email: 'tie@example.com', date: '2026-01-01T00:00:00Z' }
+  const treeWith = async (base: JsonValue, names: string[]): Promise<JsonValue> =>
+    field(
+      (
+        await post(`${repo}/git/trees`, {
+          base_tree: base,
+          tree: names.map((path) => ({ path, mode: '100644', type: 'blob', content: `${path}\n` })),
+        })
+      ).body,
+      'sha',
+    )
+  const commitOf = async (
+    message: string,
+    tree: JsonValue,
+    parents: JsonValue[],
+  ): Promise<JsonValue> =>
+    field(
+      (
+        await post(`${repo}/git/commits`, {
+          message,
+          tree,
+          parents,
+          author: sameSecond,
+          committer: sameSecond,
+        })
+      ).body,
+      'sha',
+    )
+  const rootTree = field(field(await get(`${repo}/git/commits/${String(root)}`), 'tree'), 'sha')
+  const shared = await commitOf('shared', rootTree, [root])
+  const onBase = await commitOf('on base', await treeWith(rootTree, ['y.txt']), [shared])
+  const left = await commitOf('left', await treeWith(rootTree, ['x.txt']), [shared])
+  const right = await commitOf('right', await treeWith(rootTree, ['y.txt', 'z.txt']), [onBase])
+  const tied = await commitOf('merge', await treeWith(rootTree, ['x.txt', 'y.txt', 'z.txt']), [
+    left,
+    right,
+  ])
+  await post(`${repo}/git/refs`, { ref: 'refs/heads/tie-base', sha: onBase })
+  await post(`${repo}/git/refs`, { ref: 'refs/heads/tie-head', sha: tied })
+  const tie = await get(`${repo}/compare/tie-base...tie-head`)
+  eq(
+    'the merge base is the shared commit no other shared commit reaches, dates tied',
+    [
+      field(tie, 'ahead_by'),
+      field(tie, 'behind_by'),
+      ((field(tie, 'files') ?? []) as JsonValue[]).map((f) => field(f, 'filename')),
+    ],
+    [3, 0, ['x.txt', 'z.txt']],
+  )
   eq(
     "a path's history follows the side a merge took it from",
     shas(await get(`${repo}/commits?sha=main&path=main.txt`)),

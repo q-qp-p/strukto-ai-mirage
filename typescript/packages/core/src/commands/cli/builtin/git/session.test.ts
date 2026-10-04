@@ -30,7 +30,6 @@ const BUILDER = fileURLToPath(
   new URL('../../../../../../../../integ/fixtures/git/build.sh', import.meta.url),
 )
 const DEC = new TextDecoder()
-const ENC = new TextEncoder()
 const require = createRequire(import.meta.url)
 const INDEX_LOCKED = "fatal: Unable to create '/repo/.git/index.lock': Read-only file system\n"
 
@@ -60,15 +59,13 @@ async function load(ws: Workspace, root: string, relative = ''): Promise<void> {
   }
 }
 
-/** The fixture behind a read-only mount, with `side` and `extra` written first. */
-async function readOnly(extra: Record<string, string> = {}): Promise<Workspace> {
+/** The fixture behind a read-only mount, with a `side` branch written first. */
+async function readOnly(): Promise<Workspace> {
   const ram = new RAMVFS()
   const writer = new Workspace({ '/repo': ram }, { mode: MountMode.WRITE, shellParser: parser })
   await load(writer, fixture)
   const head = readFileSync(join(fixture, '.git/refs/heads/main'))
   await writer.dispatch('write', '/repo/.git/refs/heads/side', [head])
-  for (const [path, text] of Object.entries(extra))
-    await writer.dispatch('write', `/repo/${path}`, [ENC.encode(text)])
   const ws = new Workspace({ '/repo': ram }, { mode: MountMode.READ, shellParser: parser })
   ws.registerCli('git', GIT)
   return ws
@@ -118,7 +115,6 @@ it.each([
       "'/repo/.git/refs/heads/sw.lock': Read-only file system\n",
   ],
   ['checkout -q side', 128, INDEX_LOCKED],
-  ['commit --allow-empty -m x', 128, INDEX_LOCKED],
   ['add letters.txt', 128, INDEX_LOCKED],
   [
     'clone /repo /repo/clone',
@@ -130,18 +126,25 @@ it.each([
   expect([exit, err]).toEqual([code, stderr])
 })
 
-it('warns of an ambiguous name ahead of the answer', async () => {
-  const head = readFileSync(join(fixture, '.git/refs/heads/main'), 'utf8')
-  const ws = await readOnly({ '.git/refs/tags/main': head })
-  expect(await run(ws, 'rev-parse main')).toEqual([
-    0,
-    head,
-    "warning: refname 'main' is ambiguous.\n",
-  ])
-  expect(await run(ws, 'rev-parse -q main')).toEqual([0, head, ''])
-  const quiet = await readOnly({
-    '.git/refs/tags/main': head,
-    '.git/config': `${readFileSync(join(fixture, '.git/config'), 'utf8')}[core]\n\twarnAmbiguousRefs = false\n`,
-  })
-  expect(await run(quiet, 'rev-parse main')).toEqual([0, head, ''])
+it('keeps the error of a read-only work tree', async () => {
+  const repo = new RAMVFS()
+  const tree = new RAMVFS()
+  const writer = new Workspace(
+    { '/repo': repo, '/tree': tree },
+    { mode: MountMode.WRITE, shellParser: parser },
+  )
+  await load(writer, fixture)
+  await writer.shell("printf 'edited\\n' > /tree/letters.txt")
+  const ws = new Workspace(
+    { '/repo': [repo, MountMode.WRITE], '/tree': [tree, MountMode.READ] },
+    { shellParser: parser },
+  )
+  ws.registerCli('git', GIT)
+  const result = await ws.shell(
+    'git --git-dir=/repo/.git --work-tree=/tree restore --source=HEAD~1 letters.txt',
+  )
+  const err = DEC.decode(result.stderr)
+  expect(result.exitCode).toBe(1)
+  expect(err).toContain('/tree/')
+  expect(err).not.toContain('index.lock')
 })

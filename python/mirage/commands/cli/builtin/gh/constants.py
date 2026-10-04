@@ -619,3 +619,6 @@ HELP_TOPICS: dict[str, str] = {
         "  the exit code will be 2\n"
     ),
 }
+
+GITHUB_HOST = "github.com"
+CONNECT_HINT = "check your internet connection or https://githubstatus.com"

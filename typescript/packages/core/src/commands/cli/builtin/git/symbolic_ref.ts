@@ -38,6 +38,7 @@ import { shortenRef } from './ref_fields.ts'
 import { append, entry, logged, ZERO } from './reflog.ts'
 import {
   blockingRef,
+  deleteRef,
   loadRefs,
   rawRef,
   resolveSymbolic,
@@ -152,7 +153,7 @@ export async function symbolicRef(inv: CLIInvocation): Promise<CommandFnResult> 
       if (!found.symbolic) throw new NotSymbolicDeleteError(name)
       if (name === HEAD) throw new DeleteHeadError()
       const owner = ownerOf(repo.location, name)
-      await removeFile(repo.dispatch, under(owner, name))
+      await deleteRef(repo.dispatch, owner, name)
       await removeFile(repo.dispatch, under(owner, LOGS_DIR, name))
       return [null, new IOResult()]
     }

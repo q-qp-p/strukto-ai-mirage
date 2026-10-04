@@ -30,6 +30,7 @@ from mirage.commands.cli.builtin.git.history import (
 from mirage.commands.cli.builtin.git.io import read_file, read_optional
 from mirage.commands.cli.builtin.git.objects import abbrev_for
 from mirage.commands.cli.builtin.git.ref_fields import shorten_ref
+from mirage.commands.cli.builtin.git.ref_list import unique_abbreviations
 from mirage.commands.cli.builtin.git.refs import load_refs, resolve_symbolic
 from mirage.commands.cli.builtin.git.repo import Repo, config_bool
 from mirage.commands.cli.builtin.git.revparse import (
@@ -470,7 +471,14 @@ async def rev_parse(
                 failed = exc
                 break
             if mode is None:
-                shown.append((oid if width is None else oid[:width]) + b"\n")
+                hexid = oid.decode()
+                length = len(hexid)
+                if width is not None:
+                    unique = await asyncio.to_thread(
+                        unique_abbreviations, repo, {hexid: width}
+                    )
+                    length = unique[hexid]
+                shown.append(f"{hexid[:length]}\n".encode())
                 continue
             line, error = await _abbreviated(
                 doors.dispatch, location.gitdir, table, revision, strict, warn

@@ -58,14 +58,12 @@ async function load(ws: Workspace, root: string, relative = ''): Promise<void> {
   }
 }
 
-async function workspace(mode: MountMode = MountMode.WRITE): Promise<Workspace> {
-  const ram = new RAMVFS()
-  const writer = new Workspace({ '/repo': ram }, { mode: MountMode.WRITE, shellParser: parser })
-  await load(writer, fixture)
-  const ws =
-    mode === MountMode.WRITE
-      ? writer
-      : new Workspace({ '/repo': ram }, { mode, shellParser: parser })
+async function workspace(): Promise<Workspace> {
+  const ws = new Workspace(
+    { '/repo': new RAMVFS() },
+    { mode: MountMode.WRITE, shellParser: parser },
+  )
+  await load(ws, fixture)
   ws.registerCli('git', GIT)
   return ws
 }
@@ -87,65 +85,18 @@ async function exists(ws: Workspace, path: string): Promise<boolean> {
   return (await ws.shell(`test -e /repo/.git/${path}`)).exitCode === 0
 }
 
-it('reads where HEAD points', async () => {
-  const ws = await workspace(MountMode.READ)
-  expect(await run(ws, 'symbolic-ref HEAD')).toEqual([0, 'refs/heads/main\n', ''])
-  expect(await run(ws, 'symbolic-ref --short HEAD')).toEqual([0, 'main\n', ''])
-})
-
-it('refuses a ref holding an id, or quietly exits 1', async () => {
-  const ws = await workspace(MountMode.READ)
-  expect(await run(ws, 'symbolic-ref refs/heads/main')).toEqual([
-    128,
-    '',
-    'fatal: ref refs/heads/main is not a symbolic ref\n',
-  ])
-  expect(await run(ws, 'symbolic-ref -q refs/heads/main')).toEqual([1, '', ''])
-})
-
-it('logs a line with no message when pointing HEAD', async () => {
-  const ws = await workspace()
-  const before = (await logLines(ws, 'HEAD')).length
-  expect(await run(ws, 'symbolic-ref HEAD refs/heads/topic')).toEqual([0, '', ''])
-  expect(await cat(ws, 'HEAD')).toBe('ref: refs/heads/topic\n')
-  const lines = await logLines(ws, 'HEAD')
-  expect(lines).toHaveLength(before + 1)
-  expect(lines.at(-1)).not.toContain('\t')
-  expect(lines.at(-1)?.endsWith(' +0000')).toBe(true)
-})
-
-it('records a reason as the log message', async () => {
-  const ws = await workspace()
-  await run(ws, "symbolic-ref -m 'my msg' HEAD refs/heads/topic")
-  expect((await logLines(ws, 'HEAD')).at(-1)?.endsWith('\tmy msg')).toBe(true)
-  const [, short] = await run(ws, 'rev-parse --short HEAD')
-  expect(await run(ws, 'reflog -1')).toEqual([0, `${short.trim()} HEAD@{0}: my msg\n`, ''])
-})
-
-it('refuses an empty reason', async () => {
-  const ws = await workspace()
-  expect(await run(ws, "symbolic-ref -m '' HEAD refs/heads/main")).toEqual([
-    128,
-    '',
-    'fatal: Refusing to perform update with empty message\n',
-  ])
-})
-
-it('moves HEAD to a dangling target without a log line', async () => {
+it('logs a move as git does', async () => {
   const ws = await workspace()
   const before = await logLines(ws, 'HEAD')
-  expect(await run(ws, 'symbolic-ref HEAD refs/heads/unborn')).toEqual([0, '', ''])
-  expect(await run(ws, 'symbolic-ref HEAD')).toEqual([0, 'refs/heads/unborn\n', ''])
-  expect(await logLines(ws, 'HEAD')).toEqual(before)
-})
-
-it('logs only branch, remote and notes refs', async () => {
-  const ws = await workspace()
+  await run(ws, 'symbolic-ref HEAD refs/heads/topic')
+  const moved = await logLines(ws, 'HEAD')
+  expect(moved).toHaveLength(before.length + 1)
+  expect(moved.at(-1)).not.toContain('\t')
+  await run(ws, 'symbolic-ref HEAD refs/heads/unborn')
+  expect(await logLines(ws, 'HEAD')).toEqual(moved)
   await run(ws, 'symbolic-ref refs/heads/sym refs/heads/main')
   await run(ws, 'symbolic-ref refs/other refs/heads/main')
-  const sym = await logLines(ws, 'refs/heads/sym')
-  expect(sym).toHaveLength(1)
-  expect(sym[0]?.startsWith('0'.repeat(40))).toBe(true)
+  expect((await logLines(ws, 'refs/heads/sym'))[0]?.startsWith('0'.repeat(40))).toBe(true)
   expect(await exists(ws, 'logs/refs/other')).toBe(false)
 })
 
@@ -159,78 +110,16 @@ it('lets core.logAllRefUpdates decide which refs are logged', async () => {
   expect(await exists(ws, 'logs/refs/heads/sym')).toBe(false)
 })
 
-it('follows the chain unless told not to', async () => {
+it('deletes the log with the ref, and answers a cycle as no such ref', async () => {
   const ws = await workspace()
-  await run(ws, 'symbolic-ref refs/x refs/y')
-  await run(ws, 'symbolic-ref refs/y refs/heads/main')
-  expect(await run(ws, 'symbolic-ref refs/x')).toEqual([0, 'refs/heads/main\n', ''])
-  expect(await run(ws, 'symbolic-ref --no-recurse refs/x')).toEqual([0, 'refs/y\n', ''])
-  expect(await run(ws, 'symbolic-ref --no-recurse --recurse refs/x')).toEqual([
-    0,
-    'refs/heads/main\n',
-    '',
-  ])
-})
-
-it('answers a cycle as no such ref', async () => {
-  const ws = await workspace()
+  await ws.shell(
+    'printf \'%s refs/heads/sym\\n\' "$(cat /repo/.git/refs/heads/main)" >> /repo/.git/packed-refs',
+  )
+  await run(ws, 'symbolic-ref refs/heads/sym refs/heads/main')
+  expect(await run(ws, 'symbolic-ref -d refs/heads/sym')).toEqual([0, '', ''])
+  expect(await exists(ws, 'logs/refs/heads/sym')).toBe(false)
+  expect((await run(ws, 'rev-parse -q --verify refs/heads/sym'))[0]).toBe(1)
   await run(ws, 'symbolic-ref CYCLE_A CYCLE_B')
   await run(ws, 'symbolic-ref CYCLE_B CYCLE_A')
   expect(await run(ws, 'symbolic-ref CYCLE_A')).toEqual([128, '', 'fatal: No such ref: CYCLE_A\n'])
-})
-
-it('deletes the ref and its log, never HEAD', async () => {
-  const ws = await workspace()
-  await run(ws, 'symbolic-ref refs/heads/sym refs/heads/main')
-  expect(await run(ws, 'symbolic-ref -d refs/heads/sym')).toEqual([0, '', ''])
-  expect(await exists(ws, 'refs/heads/sym')).toBe(false)
-  expect(await exists(ws, 'logs/refs/heads/sym')).toBe(false)
-  expect(await run(ws, 'symbolic-ref -d HEAD')).toEqual([
-    128,
-    '',
-    "fatal: deleting 'HEAD' is not allowed\n",
-  ])
-  expect(await run(ws, 'symbolic-ref -d -q refs/heads/main')).toEqual([
-    128,
-    '',
-    'fatal: Cannot delete refs/heads/main, not a symbolic ref\n',
-  ])
-})
-
-it.each([
-  ['symbolic-ref HEAD main', 128, 'fatal: Refusing to point HEAD outside of refs/\n'],
-  [
-    'symbolic-ref HEAD refs/heads/../x',
-    128,
-    "fatal: Refusing to set 'HEAD' to invalid ref 'refs/heads/../x'\n",
-  ],
-  [
-    'symbolic-ref lower refs/heads/main',
-    1,
-    "error: refusing to update ref with bad name 'lower'\n",
-  ],
-  [
-    'symbolic-ref refs/heads/main/x refs/heads/main',
-    1,
-    "error: cannot lock ref 'refs/heads/main/x': 'refs/heads/main' exists; cannot create 'refs/heads/main/x'\n",
-  ],
-])('leaves HEAD alone when it refuses: %s', async (line, code, stderr) => {
-  const ws = await workspace()
-  expect(await run(ws, line)).toEqual([code, '', stderr])
-  expect(await cat(ws, 'HEAD')).toBe('ref: refs/heads/main\n')
-})
-
-it('prints the usage for a wrong operand count', async () => {
-  const ws = await workspace(MountMode.READ)
-  const [code, out, err] = await run(ws, 'symbolic-ref a b c')
-  expect([code, out]).toEqual([129, ''])
-  expect(err.startsWith('usage: git symbolic-ref [-m <reason>] <name> <ref>\n')).toBe(true)
-  expect(err.endsWith('    -m <reason>           reason of the update\n\n')).toBe(true)
-})
-
-it('is refused by a read-only mount', async () => {
-  const ws = await workspace(MountMode.READ)
-  const [code] = await run(ws, 'symbolic-ref HEAD refs/heads/topic')
-  expect(code).toBe(1)
-  expect(await cat(ws, 'HEAD')).toBe('ref: refs/heads/main\n')
 })

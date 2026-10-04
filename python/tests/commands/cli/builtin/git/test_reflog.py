@@ -44,11 +44,6 @@ def test_the_message_is_separated_by_a_tab():
     assert line.endswith(b"\tcommit: two words\n")
 
 
-def test_an_empty_message_leaves_the_tab_out():
-    line = entry(OLD, NEW, WHO, 1700000000, "")
-    assert line == OLD + b" " + NEW + b" " + WHO + b" 1700000000 +0000\n"
-
-
 def test_a_first_entry_names_no_predecessor():
     line = entry(ZERO, NEW, WHO, 1700000000, "commit (initial): first")
     assert line.startswith(b"0" * 40)

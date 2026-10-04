@@ -455,7 +455,7 @@ export async function handleCommand(
         undefined,
         false,
         undefined,
-        cmdName !== 'tar',
+        !['tar', 'diff'].includes(cmdName),
       )
     let csFlags = csParsed.flagKwargs
     const csTexts = findExprTokens ?? csParsed.texts
@@ -468,10 +468,10 @@ export async function handleCommand(
         new ExecutionNode({ command: cmdStr, exitCode: code, stderr: msg }),
       ]
     }
-    // sort's output flag and cp/mv's -t own a mount for routing, but are not
-    // inputs. Parsed operands preserve aliases, order, and repeated path
+    // sort's output flag, cp/mv's -t and diff's -X own a mount for routing,
+    // but are not inputs. Parsed operands preserve aliases, order, and repeated path
     // values.
-    let csScopes = ['sort', 'cp', 'mv'].includes(cmdName) ? csParsed.paths : pathScopes
+    let csScopes = ['sort', 'cp', 'mv', 'diff'].includes(cmdName) ? csParsed.paths : pathScopes
     if (strategyFor(cmdName as Cmd) === Strategy.RELAY) {
       // STREAM and FANOUT run each operand natively on its mount, which
       // expands the operand's glob. RELAY sees every operand at once (wc's

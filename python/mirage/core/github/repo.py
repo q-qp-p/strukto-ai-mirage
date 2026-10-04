@@ -119,15 +119,15 @@ URL_PREFIXES = (
 PROTOCOLS = (*URL_PREFIXES[1:], "ftp:", "ftps:", "file:")
 
 
-def _repo_from_url(spec: str) -> RepoRef:
-    """A repository named by URL, as go-gh's ParseURL reads it.
-
-    ``git@HOST:OWNER/REPO.git`` is scp syntax for ``ssh://``, the path
-    must be exactly two segments once its slashes are trimmed, and
-    ``.git`` comes off the name.
+def _url_of(spec: str) -> tuple[str, str, str]:
+    """A repository URL's scheme, host and path, as go-gh's ParseURL
+    reads them: ``git@HOST:OWNER/REPO.git`` is scp syntax for ``ssh://``.
 
     Args:
         spec (str): the URL as the line spelled it.
+
+    Raises:
+        ValueError: the URL names no host.
     """
     raw = spec
     if not raw.startswith(PROTOCOLS) and ":" in raw and "\\" not in raw:
@@ -139,8 +139,32 @@ def _repo_from_url(spec: str) -> RepoRef:
         host = None
     if not host:
         raise ValueError("no hostname detected")
-    path = url.path
-    if url.scheme == "ssh" and path.startswith("//"):
+    return url.scheme, host, url.path
+
+
+def repo_host(spec: str) -> str | None:
+    """The host a repository argument names, None for ``OWNER/REPO``.
+
+    Args:
+        spec (str): the repository as the line spelled it.
+    """
+    if spec.startswith(URL_PREFIXES):
+        return _url_of(spec)[1]
+    parts = spec.split("/")
+    return parts[0].lower() if len(parts) == 3 else None
+
+
+def _repo_from_url(spec: str) -> RepoRef:
+    """A repository named by URL, as go-gh's ParseURL reads it.
+
+    The path must be exactly two segments once its slashes are trimmed,
+    and ``.git`` comes off the name.
+
+    Args:
+        spec (str): the URL as the line spelled it.
+    """
+    scheme, _host, path = _url_of(spec)
+    if scheme == "ssh" and path.startswith("//"):
         path = path[1:]
     parts = path.strip("/").split("/")
     if len(parts) != 2:

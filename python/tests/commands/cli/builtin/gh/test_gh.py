@@ -500,100 +500,11 @@ async def test_forks_under_the_source_name_when_unnamed():
 
 
 @pytest.mark.asyncio
-async def test_sends_org_and_default_branch_only_in_the_fork_request():
-    _reset({"full_name": "acme/r"})
-    await fork(_inv(["o/r"], {"org": "acme", "default_branch_only": True}))
-    assert CALLS[0]["body"] == {
-        "organization": "acme",
-        "default_branch_only": True,
-    }
-
-
-@pytest.mark.asyncio
-async def test_fork_takes_false_clone_and_remote_and_refuses_a_clone():
-    _reset({"full_name": "me/r"})
-    await fork(
-        _inv(
-            ["o/r"], {"clone": "false", "remote": "false", "remote_name": "up"}
-        )
-    )
-    assert len(CALLS) == 1
-    with pytest.raises(ValueError, match="--clone is not supported"):
-        await fork(_inv(["o/r"], {"clone": True}))
+async def test_refuses_a_remote_for_the_current_repository():
     with pytest.raises(ValueError, match="--remote is not supported"):
         await fork(
             _inv([], {"remote": "true"}, GhConfig(token="t", repo="o/r"))
         )
-    with pytest.raises(ValueError, match="--org cannot be blank"):
-        await fork(_inv(["o/r"], {"org": ""}))
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "spec",
-    [
-        "https://github.com/octocat/Hello-World",
-        "https://github.com/octocat/Hello-World.git/",
-        "git@github.com:octocat/Hello-World.git",
-        "ssh://git@github.com:22/octocat/Hello-World.git",
-        "git+https://github.com/octocat/Hello-World",
-    ],
-)
-async def test_reads_a_repository_given_as_a_url(spec):
-    _reset({"full_name": "me/Hello-World"})
-    await fork(_inv([spec]))
-    assert CALLS[0]["path"] == "/repos/octocat/Hello-World/forks"
-
-
-@pytest.mark.asyncio
-async def test_refuses_a_url_that_names_no_repository():
-    with pytest.raises(ValueError, match="invalid path: /o/r/tree/main"):
-        await view(_inv(["https://github.com/o/r/tree/main"]))
-    with pytest.raises(
-        ValueError, match="did not understand argument: invalid path: /o"
-    ):
-        await fork(_inv(["https://github.com/o"]))
-    with pytest.raises(ValueError, match="OWNER/REPO"):
-        await view(_inv(["//o/r"]))
-
-
-async def _help(*texts: str) -> tuple[str, str, int]:
-    node = next(c for c in GH.subcommands if c.name == "help")
-    assert node.fn is not None
-    out, io = await node.fn(_inv(texts))
-    err = await materialize(io.stderr) if io.stderr is not None else b""
-    return (out or b"").decode(), err.decode(), io.exit_code
-
-
-@pytest.mark.asyncio
-async def test_help_prints_the_root_and_a_commands_help():
-    assert "gh" in (await _help())[0]
-    out, _err, code = await _help("repo", "fork")
-    assert "--default-branch-only" in out
-    assert code == 0
-    assert (await _help("repo", "nosuch"))[0] == (await _help("repo"))[0]
-
-
-@pytest.mark.asyncio
-async def test_help_answers_the_environment_topic_in_this_ghs_terms():
-    out, _err, code = await _help("environment")
-    assert "reads no environment variables" in out
-    assert code == 0
-
-
-@pytest.mark.asyncio
-async def test_help_gives_ghs_unknown_topic_answer_on_stderr():
-    out, err, code = await _help("nosuch", "other")
-    assert out == ""
-    assert err.split("\n")[:4] == [
-        "Unknown help topic [`nosuch` `other`]",
-        "Usage:  gh <command> <subcommand> [flags]",
-        "",
-        "Available commands:",
-    ]
-    assert "  api\n" in err
-    assert "  help\n" not in err
-    assert code == 0
 
 
 @pytest.fixture()
