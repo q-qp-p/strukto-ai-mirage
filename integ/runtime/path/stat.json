@@ -82,14 +82,11 @@
             "stdout": "os 0o40000\npathlib 0o40000\nnlink 2\n"
           },
           "expect_on": {
-            "wasi": {
-              "stdout": "os 0o40000\npathlib 0o40000\nnlink 1\n"
+            "quickjs": {
+              "stdout": "os 0 40000\nnlink 2\n"
             },
             "pyodide": {
               "stdout": "os 0o40000\npathlib 0o40000\nnlink 1\n"
-            },
-            "quickjs": {
-              "stdout": "os 0 40000\nnlink 1\n"
             }
           }
         }
@@ -140,9 +137,6 @@
           "expect_on": {
             "quickjs@python": {
               "stdout": "opened\nrow survived true 40000\n"
-            },
-            "quickjs@typescript": {
-              "stdout": "refused\nrow survived true 40755\n"
             }
           }
         }

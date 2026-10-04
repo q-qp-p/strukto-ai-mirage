@@ -18,13 +18,13 @@ import { concat } from '../../../../io/cachable_iterator.ts'
 
 /**
  * One guest mutation, recorded in the order the script performed it.
- * `write` and `append` carry their bytes because the drain runs after the
- * script returns, when the filesystem holds only the final state: an
+ * `pwrite` and `append` carry their bytes because the drain runs after
+ * the script returns, when the filesystem holds only the final state: an
  * atomic-write (write a temp file, rename it into place) would otherwise
  * replay as a read of a path the rename already moved.
  */
 export type MirageMutation =
-  | { readonly kind: 'write'; readonly path: string; readonly bytes: Uint8Array }
+  | { readonly kind: 'create'; readonly path: string }
   | { readonly kind: 'append'; readonly path: string; readonly bytes: Uint8Array }
   | {
       readonly kind: 'pwrite'
@@ -52,13 +52,14 @@ export type MirageMutation =
  * its own worker.
  */
 export interface MutationJournal {
+  markCreate(path: string): void
   /**
    * Args:
    *   path: mount-prefixed path the mutation names.
-   *   bytes: the whole file for a write, the new tail for an append.
+   *   offset: where the file ended, which is where the tail lands.
+   *   bytes: the new tail.
    */
-  markWrite(path: string, bytes: Uint8Array): void
-  markAppend(path: string, bytes: Uint8Array): void
+  markAppend(path: string, offset: number, bytes: Uint8Array): void
   /**
    * Args:
    *   path: mount-prefixed path the mutation names.
@@ -94,37 +95,35 @@ export interface MutationJournal {
   takeMutations(): MirageMutation[]
 }
 
-// A write, append or pwrite holds its bytes as parts until the drain, so a
-// loop of small writes costs one copy per write rather than one per byte
+// An append or pwrite holds its bytes as parts until the drain, so a loop
+// of small writes costs one copy per write rather than one per byte
 // written so far.
 type Pending =
-  | Exclude<MirageMutation, { kind: 'write' | 'append' | 'pwrite' }>
-  | { kind: 'write'; path: string; parts: Uint8Array[] }
+  | Exclude<MirageMutation, { kind: 'append' | 'pwrite' }>
   | { kind: 'append'; path: string; parts: Uint8Array[] }
   | { kind: 'pwrite'; path: string; offset: number; parts: Uint8Array[]; length: number }
 
 export function createJournal(): MutationJournal {
   const journal: Pending[] = []
   return {
-    markWrite(path, bytes) {
+    markCreate(path) {
+      journal.push({ kind: 'create', path })
+    },
+    markAppend(path, offset, bytes) {
       // A guest buffer handed over by pyodide can be a view into WASM
       // memory, which relocates when the heap grows; copy on arrival so
       // the journal owns bytes that stay valid until the drain.
       const owned = new Uint8Array(bytes)
       const last = journal[journal.length - 1]
-      // A whole write replaces what the file held, so a write or a truncate
-      // just before it on the same path says nothing the mount still needs.
-      if ((last?.kind === 'write' || last?.kind === 'truncate') && last.path === path) {
-        journal[journal.length - 1] = { kind: 'write', path, parts: [owned] }
+      // A tail continues the append before it, or a pwrite that reached
+      // the old end, as one range.
+      if (last?.kind === 'append' && last.path === path) {
+        last.parts.push(owned)
         return
       }
-      journal.push({ kind: 'write', path, parts: [owned] })
-    },
-    markAppend(path, bytes) {
-      const owned = new Uint8Array(bytes)
-      const last = journal[journal.length - 1]
-      if ((last?.kind === 'append' || last?.kind === 'write') && last.path === path) {
+      if (last?.kind === 'pwrite' && last.path === path && last.offset + last.length === offset) {
         last.parts.push(owned)
+        last.length += owned.length
         return
       }
       journal.push({ kind: 'append', path, parts: [owned] })
@@ -162,9 +161,6 @@ export function createJournal(): MutationJournal {
     },
     takeMutations() {
       return journal.splice(0, journal.length).map((entry): MirageMutation => {
-        if (entry.kind === 'write') {
-          return { kind: 'write', path: entry.path, bytes: concat(entry.parts) }
-        }
         if (entry.kind === 'append') {
           return { kind: 'append', path: entry.path, bytes: concat(entry.parts) }
         }
@@ -191,8 +187,8 @@ export function createJournal(): MutationJournal {
  */
 export async function applyMutation(vfs: RuntimeVFS, mutation: MirageMutation): Promise<void> {
   switch (mutation.kind) {
-    case 'write':
-      return vfs.write(mutation.path, mutation.bytes)
+    case 'create':
+      return vfs.create(mutation.path)
     // The journal recorded only the tail, so the whole file is not
     // available here; RuntimeVFS.append reads the base itself when the
     // mount has no append op.

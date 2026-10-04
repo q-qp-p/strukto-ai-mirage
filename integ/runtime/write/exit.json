@@ -29,12 +29,6 @@
           },
           "expect": {
             "exit": 0
-          },
-          "expect_on": {
-            "pyodide": {
-              "exit": 1,
-              "stderr_contains": "Program terminated with exit(0)"
-            }
           }
         },
         {

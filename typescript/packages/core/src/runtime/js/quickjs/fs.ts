@@ -12,6 +12,7 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import { classify } from '../../../errors/index.ts'
 import { resolvePath } from '../../../utils/path.ts'
 import { PathSpec } from '../../../types.ts'
 import { WASI, errnoFor } from './errors.ts'
@@ -20,7 +21,7 @@ import { stat } from './stat.ts'
 import { epochToIso } from '../../../utils/dates.ts'
 import { FileHandle, FileTable, parseMode, type OpenMode } from '../../handles/index.ts'
 import { applyOpen } from '../../open.ts'
-import type { RuntimeVFS } from '../../vfs.ts'
+import type { RuntimeVFS, VFSStat } from '../../vfs.ts'
 import type { QuickJSAsyncContext, QuickJSHandle } from 'quickjs-emscripten'
 
 const ENC = new TextEncoder()
@@ -31,6 +32,37 @@ const DEC = new TextDecoder('utf-8', { fatal: false })
 // wasm/errors.py keeps): guests compare against these, so host errno
 // numbering must not leak.
 const ENOENT = WASI.ENOENT
+
+/**
+ * Hand text to the guest. The engine takes a C string, so text holding
+ * a NUL crosses as the pieces between its NULs, which the bootstrap
+ * joins back.
+ *
+ * @param ctx - the quickjs context
+ * @param text - the text the guest reads
+ */
+export function toGuestText(ctx: QuickJSAsyncContext, text: string): QuickJSHandle {
+  if (!text.includes('\0')) return ctx.newString(text)
+  const parts = ctx.newArray()
+  text.split('\0').forEach((part, i) => {
+    const h = ctx.newString(part)
+    ctx.setProp(parts, i, h)
+    h.dispose()
+  })
+  return parts
+}
+
+/**
+ * Read text from the guest, whole or as the pieces between its NULs.
+ *
+ * @param ctx - the quickjs context
+ * @param handle - a string, or the array the bootstrap split one into
+ */
+export function fromGuestText(ctx: QuickJSAsyncContext, handle: QuickJSHandle): string {
+  if (ctx.typeof(handle) === 'string') return ctx.getString(handle)
+  const parts: unknown = ctx.dump(handle)
+  return Array.isArray(parts) ? parts.map(String).join('\0') : String(parts)
+}
 
 /**
  * Install the `std.open`/`os.readdir` host functions on an asyncified
@@ -94,18 +126,19 @@ export function installQuickJsFs(
   defineAsync('__mirage_open', async (pathH, modeH) => {
     const path = absolute(pathH)
     // The engine validates the mode before touching the filesystem
-    // (qjs-libc throws TypeError before any open); -2 tells the
+    // (qjs-libc throws TypeError before any open); null tells the
     // bootstrap to raise that refusal, since a host throw would not
-    // arrive typed. The shared parser is stricter than qjs-libc's
+    // arrive typed. Any other refusal answers -errno, which the
+    // bootstrap hands to the guest's errorObj. The shared parser is stricter than qjs-libc's
     // character scan ('rr' passes strspn but not CPython's one-base
     // rule); the strict answer is the one both guests can agree on.
     let mode: OpenMode
     try {
       mode = parseMode(ctx.getString(modeH))
     } catch {
-      return ctx.newNumber(-2)
+      return ctx.null
     }
-    if (vfs?.serves(path) !== true) return ctx.newNumber(-1)
+    if (vfs?.serves(path) !== true) return ctx.newNumber(-ENOENT)
     // The open's effect lands through the mount at open, by the rule
     // every door shares, so write modes and a read-narrowed session
     // refuse here (the guest gets null), the ledger records the real
@@ -115,7 +148,7 @@ export function installQuickJsFs(
     // create-capable mode would create over content this open never saw.
     let handle: FileHandle
     try {
-      const row = await applyOpen(vfs, path, mode)
+      const row = await openRow(vfs, path, mode)
       // Nothing is read at open: the handle fetches what a read lands in.
       // A handle that writes reads the stored bytes, since its writes land
       // on them; a read-only one sees the rendering.
@@ -131,8 +164,8 @@ export function installQuickJsFs(
               ),
         { size: row?.size ?? 0, writable: mode.writable, append: mode.append },
       )
-    } catch {
-      return ctx.newNumber(-1)
+    } catch (err) {
+      return ctx.newNumber(-errnoFor(err))
     }
     return ctx.newNumber(table.add(handle))
   })
@@ -168,18 +201,32 @@ export function installQuickJsFs(
   defineSync('__mirage_read', (fdH, maxH) => {
     const file = table.get(ctx.getNumber(fdH))
     if (file === undefined) return ctx.newString('')
-    return ctx.newString(DEC.decode(file.read(ctx.getNumber(maxH))))
+    return toGuestText(ctx, DEC.decode(file.read(ctx.getNumber(maxH))))
+  })
+
+  defineSync('__mirage_read_bytes', (fdH, maxH) => {
+    const file = table.get(ctx.getNumber(fdH))
+    const bytes = file === undefined ? new Uint8Array(0) : file.read(ctx.getNumber(maxH))
+    return ctx.newArrayBuffer(bytes.slice().buffer)
   })
 
   defineSync('__mirage_getline', (fdH) => {
     const line = table.get(ctx.getNumber(fdH))?.readLine() ?? null
-    return line === null ? ctx.null : ctx.newString(DEC.decode(line))
+    return line === null ? ctx.null : toGuestText(ctx, DEC.decode(line))
   })
 
   defineSync('__mirage_write', (fdH, textH) => {
     const file = table.get(ctx.getNumber(fdH))
-    if (file?.writable === true) file.write(ENC.encode(ctx.getString(textH)))
+    if (file?.writable === true) file.write(ENC.encode(fromGuestText(ctx, textH)))
     return ctx.undefined
+  })
+
+  defineSync('__mirage_write_bytes', (fdH, bufferH) => {
+    const file = table.get(ctx.getNumber(fdH))
+    if (file?.writable !== true) return ctx.newNumber(0)
+    const bytes = ctx.getArrayBuffer(bufferH).consume((view) => view.value.slice())
+    file.write(bytes)
+    return ctx.newNumber(bytes.length)
   })
 
   defineSync('__mirage_seek', (fdH, offsetH, whenceH) => {
@@ -254,8 +301,7 @@ export function installQuickJsFs(
     const dst = absolute(dstH)
     if (vfs?.serves(src) !== true || !vfs.serves(dst)) return ctx.newNumber(-ENOENT)
     // The door refuses a pair on different mounts (CROSS_MOUNT), which
-    // this engine numbers -44, the real engine's answer (pinned live:
-    // each mount is its own preopen and the destination never resolves).
+    // this engine numbers -75 (EXDEV), as the real engine does.
     try {
       await vfs.rename(src, dst)
       return ctx.newNumber(0)
@@ -277,5 +323,19 @@ export function installQuickJsFs(
       }
     }
     return failures
+  }
+}
+
+/**
+ * The row an open's content starts from, by the shared open rule, except
+ * that qjs-libc's fopen opens a directory for reading (its reads then
+ * fail), so a read-only open of one is an empty file here.
+ */
+async function openRow(vfs: RuntimeVFS, path: string, mode: OpenMode): Promise<VFSStat | null> {
+  try {
+    return await applyOpen(vfs, path, mode)
+  } catch (err) {
+    if (mode.writable || classify(err) !== 'EISDIR') throw err
+    return null
   }
 }

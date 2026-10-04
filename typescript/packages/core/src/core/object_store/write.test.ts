@@ -95,9 +95,9 @@ describe('object_store write', () => {
   })
 
   it('mkdir writes a marker and parents gate ancestors', async () => {
-    const store = new FakeStore()
+    const store = new FakeStore({ 'a/': '' })
     const manager = await managed(() => makeMkdir(makeDriver(store))(accessor, spec('/a/b')))
-    expect(store.contents()).toEqual({ 'a/b/': '' })
+    expect(store.contents()).toEqual({ 'a/': '', 'a/b/': '' })
     expect(manager.writes).toEqual(['/a/b'])
     const deep = await managed(() => makeMkdir(makeDriver(store))(accessor, spec('/x/y'), true))
     expect(deep.writes).toEqual(['/x/y'])
@@ -153,6 +153,16 @@ describe('object_store write', () => {
         code: 'EEXIST',
       })
     }
+    expect(store.puts).toEqual([])
+  })
+
+  it('mkdir refuses a missing parent without parents', async () => {
+    // mkdir(2) makes one directory under one that exists; only `-p` makes
+    // the chain, so a guest's os.mkdir under a missing parent is ENOENT
+    // and puts nothing.
+    const store = new FakeStore()
+    const err = await caught(() => makeMkdir(makeDriver(store))(accessor, spec('/a/b')))
+    expect((err as { code?: string }).code).toBe('ENOENT')
     expect(store.puts).toEqual([])
   })
 

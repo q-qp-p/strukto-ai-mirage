@@ -90,9 +90,9 @@ def test_truncate_extends_a_missing_key(accessor):
 
 
 def test_mkdir_writes_a_marker_and_parents_gate_ancestors(accessor):
-    store = FakeStore()
+    store = FakeStore({"a/": b""})
     manager = _managed(make_mkdir(make_driver(store))(accessor, spec("/a/b")))
-    assert store.objects == {"a/b/": b""}
+    assert store.objects == {"a/": b"", "a/b/": b""}
     assert manager.writes == ["/a/b"]
     deep = _managed(
         make_mkdir(make_driver(store))(accessor, spec("/x/y"), parents=True)
@@ -115,6 +115,16 @@ def test_mkdir_refuses_a_name_that_exists(accessor):
     ):
         with pytest.raises(FileExistsError):
             _managed(mkdir(accessor, spec(path), parents=parents))
+    assert store.puts == []
+
+
+def test_mkdir_refuses_a_missing_parent_without_parents(accessor):
+    # mkdir(2) makes one directory under one that exists; only `-p`
+    # makes the chain, so a guest's os.mkdir under a missing parent is
+    # ENOENT and puts nothing.
+    store = FakeStore()
+    with pytest.raises(FileNotFoundError):
+        _managed(make_mkdir(make_driver(store))(accessor, spec("/a/b")))
     assert store.puts == []
 
 

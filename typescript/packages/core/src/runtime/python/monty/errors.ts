@@ -102,8 +102,10 @@ export function guestError(code: GuestCode, path: string, target?: string): Erro
  * (PYTHON_EXC_NAMES), so agent code can `except FileNotFoundError`
  * exactly as it does on the python host. Every named condition
  * converts (a non-empty rmdir is an OSError with errno 39, not a raw
- * JS error); a failure the vocabulary does not name passes through
- * untouched.
+ * JS error), and a failure the vocabulary does not name is EIO, as a
+ * kernel reports a device that failed (the engine knows only builtin
+ * types, so a backend's own error would reach the guest as
+ * RuntimeError).
  *
  * Args:
  *   err: whatever the mount op rejected with.
@@ -112,7 +114,10 @@ export function guestError(code: GuestCode, path: string, target?: string): Erro
  *     source.
  */
 export function asGuestError(err: unknown, path: string, target?: string): unknown {
-  const condition = classify(err)
-  if (condition === null) return err
-  return guestError(condition, path, target)
+  // A guest exception this door already built (a refusal before any
+  // mount op) is CPython's shape already, and keeps its own condition.
+  if (err instanceof Error && Object.values(CPYTHON).some((row) => row.exception === err.name)) {
+    return err
+  }
+  return guestError(classify(err) ?? 'EIO', path, target)
 }
