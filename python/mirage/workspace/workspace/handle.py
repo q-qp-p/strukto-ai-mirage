@@ -21,18 +21,20 @@ from mirage.ops.ops import Ops
 from mirage.workspace.session import SessionState
 
 if TYPE_CHECKING:
+    from mirage.workspace.tools.tool_operations import MirageToolOperations
     from mirage.workspace.workspace.workspace import Workspace
 
 
 class Session:
-    """One session's two doors, bound together.
+    """One session's doors, bound together.
 
-    ``shell`` runs a line as the session and ``vfs`` is the op facade
-    run as it, so a host holds one object per agent and both doors
-    answer under the same profile: hides, mount modes, grants and
-    standing decisions. Nothing is stored here; the session record
-    stays with the session manager and ``state`` reads it. Obtained
-    from ``Workspace.session``, which creates the session or adopts it.
+    ``shell`` runs a line as the session, ``vfs`` is the op facade run
+    as it and ``tools`` the agent tools over both, so a host holds one
+    object per agent and every door answers under the same profile:
+    hides, mount modes, grants and standing decisions. Nothing is
+    stored here; the session record stays with the session manager and
+    ``state`` reads it. Obtained from ``Workspace.session``, which
+    creates the session or adopts it.
     """
 
     def __init__(self, ws: "Workspace", session_id: str) -> None:
@@ -52,6 +54,12 @@ class Session:
     def vfs(self) -> Ops:
         """The op facade run as this session."""
         return self._ws.vfs._for_session(self._id)
+
+    @property
+    def tools(self) -> "MirageToolOperations":
+        """The agent tools run as this session: one table per session,
+        shared by every caller in the process."""
+        return self._ws._session_tools(self._id)
 
     async def shell(
         self,

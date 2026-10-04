@@ -146,6 +146,7 @@ from mirage.workspace.snapshot.state import (
     reusable_mounts,
 )
 from mirage.workspace.store import WorkspaceStateStore
+from mirage.workspace.tools.tool_operations import MirageToolOperations
 from mirage.workspace.workspace.build import (
     resolve_control_stores,
     wire_runtime_world,
@@ -314,6 +315,7 @@ class Workspace:
         self._session_mgr = SessionManager(
             session_id, store=stores.sessions, seed_vars=seed_vars
         )
+        self._tools: dict[str, MirageToolOperations] = {}
         # Admission policies, consulted in registration order after the
         # built-ins the registry seeds: the profile's admission rules
         # (PermissionsPolicy, reading each session's compiled rules
@@ -579,6 +581,28 @@ class Workspace:
         the op vocabulary the dispatcher speaks, not a filesystem.
         """
         return self._ops
+
+    @property
+    def tools(self) -> MirageToolOperations:
+        """The agent tools as the default session; ``Session.tools``
+        for another."""
+        return self._session_tools(self.default_session_id)
+
+    def _session_tools(self, session_id: str) -> MirageToolOperations:
+        """The one tool table a session has, made on first use.
+
+        Every caller in the process shares it, so a file the agent read
+        through one is guarded when it writes through another. Closing
+        the session drops it.
+
+        Args:
+            session_id (str): the session.
+        """
+        tools = self._tools.get(session_id)
+        if tools is None:
+            tools = MirageToolOperations(Session(self, session_id))
+            self._tools[session_id] = tools
+        return tools
 
     @property
     def namespace(self) -> Namespace:
@@ -1613,6 +1637,7 @@ class Workspace:
         # session reusing the id inherits nothing.
         await self._session_mgr.close(session_id)
         await self.job_table.close_session(session_id)
+        self._tools.pop(session_id, None)
 
     async def close_all_sessions(self) -> None:
         closed = [

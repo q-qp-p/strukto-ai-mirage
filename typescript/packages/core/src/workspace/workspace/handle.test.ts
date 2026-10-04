@@ -139,3 +139,42 @@ describe('handle parity with the workspace door', () => {
     expectTypeOf<SessionExecuteOptions>().toEqualTypeOf<Omit<ExecuteOptions, 'sessionId'>>()
   })
 })
+
+describe('session tools', () => {
+  async function plain(): Promise<Workspace> {
+    const ws = new Workspace(
+      { '/': new RAMVFS() },
+      { mode: MountMode.WRITE, shellParser: await getTestParser() },
+    )
+    open.push(ws)
+    await ws.shell('echo one > /a.txt')
+    return ws
+  }
+
+  it('has one table per session that every caller shares', async () => {
+    const ws = await plain()
+    const agent = await ws.session('agent')
+    const other = await ws.session('other')
+    expect(agent.tools).toBe(new Session(ws, 'agent').tools)
+    expect(ws.tools).toBe(new Session(ws, ws.defaultSessionId).tools)
+    await agent.tools.call('read', { path: '/a.txt' })
+    const written = await new Session(ws, 'agent').tools.call('write', {
+      path: '/a.txt',
+      content: 'two\n',
+    })
+    const refused = await other.tools.call('write', { path: '/a.txt', content: 'three\n' })
+    expect(written.isError).toBeUndefined()
+    expect(refused.isError).toBe(true)
+    expect(refused.content[0]?.text).toContain('read all of it')
+  })
+
+  it('drops a closed session table', async () => {
+    const ws = await plain()
+    const agent = await ws.session('agent')
+    await agent.tools.call('read', { path: '/a.txt' })
+    await ws.closeSession('agent')
+    const again = await ws.session('agent')
+    const refused = await again.tools.call('write', { path: '/a.txt', content: 'two\n' })
+    expect(refused.isError).toBe(true)
+  })
+})

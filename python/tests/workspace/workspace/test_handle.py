@@ -134,3 +134,43 @@ async def test_a_handle_forwards_per_call_options():
             reset_current_session(token)
     finally:
         await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_a_session_has_one_tool_table_every_caller_shares():
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await ws.shell("echo one > /a.txt")
+    agent = await ws.session("agent")
+    other = await ws.session("other")
+    try:
+        assert agent.tools is Session(ws, "agent").tools
+        assert ws.tools is Session(ws, ws.default_session_id).tools
+        await agent.tools.call("read", {"path": "/a.txt"})
+        written = await Session(ws, "agent").tools.call(
+            "write", {"path": "/a.txt", "content": "two\n"}
+        )
+        refused = await other.tools.call(
+            "write", {"path": "/a.txt", "content": "three\n"}
+        )
+    finally:
+        await ws.close()
+    assert not written.is_error
+    assert refused.is_error
+    assert "read all of it" in refused.text
+
+
+@pytest.mark.asyncio
+async def test_closing_a_session_drops_its_tool_table():
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await ws.shell("echo one > /a.txt")
+    agent = await ws.session("agent")
+    try:
+        await agent.tools.call("read", {"path": "/a.txt"})
+        await ws.close_session("agent")
+        again = await ws.session("agent")
+        refused = await again.tools.call(
+            "write", {"path": "/a.txt", "content": "two\n"}
+        )
+    finally:
+        await ws.close()
+    assert refused.is_error

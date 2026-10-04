@@ -129,6 +129,7 @@ import { normalizeMounts, prepareAddedMount, unmountPrefix } from './mounts.ts'
 import { Router } from './routing.ts'
 import { Runtimes } from './runtimes.ts'
 import { Session } from './handle.ts'
+import { MirageToolOperations } from '../tools/tool_operations.ts'
 import type { ExecuteOptions, ExecuteResult, MountSpec, WorkspaceOptions } from './types.ts'
 import { Mount } from '../mount/spec.ts'
 import { WatchManager } from './watch.ts'
@@ -164,6 +165,7 @@ export class Workspace {
   private readonly dispatcher: Dispatcher
   readonly observer: Observer
   readonly vfs: Ops
+  private readonly toolTables = new Map<string, MirageToolOperations>()
   private closed = false
   private readonly lineLock = new KeyLock()
   private readonly closers: (() => Promise<void>)[] = []
@@ -850,6 +852,27 @@ export class Workspace {
     return this.registry.decisions
   }
 
+  /** The agent tools as the default session; `Session.tools` for another. */
+  get tools(): MirageToolOperations {
+    return this.sessionTools(this.defaultSessionId)
+  }
+
+  /**
+   * The one tool table a session has, made on first use. Every caller in
+   * the process shares it, so a file the agent read through one is
+   * guarded when it writes through another. Closing the session drops it.
+   *
+   * @internal `Session.tools` is the door.
+   */
+  sessionTools(sessionId: string): MirageToolOperations {
+    let tools = this.toolTables.get(sessionId)
+    if (tools === undefined) {
+      tools = new MirageToolOperations(new Session(this, sessionId))
+      this.toolTables.set(sessionId, tools)
+    }
+    return tools
+  }
+
   get cwd(): string {
     return this.sessionManager.cwd
   }
@@ -1008,6 +1031,7 @@ export class Workspace {
     // the id inherits nothing.
     await this.sessionManager.close(sessionId)
     await this.jobTable.closeSession(sessionId)
+    this.toolTables.delete(sessionId)
   }
 
   async closeAllSessions(): Promise<void> {

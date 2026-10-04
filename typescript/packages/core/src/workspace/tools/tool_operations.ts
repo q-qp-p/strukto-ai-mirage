@@ -12,13 +12,10 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
-import type { Ops } from '@struktoai/mirage-core/ops/ops'
-import { gnuDirname } from '@struktoai/mirage-core/utils/path'
-import type {
-  ExecuteOptions,
-  ExecuteResult,
-  Workspace,
-} from '@struktoai/mirage-core/workspace/workspace/workspace'
+import type { Ops } from '../../ops/ops.ts'
+import { gnuDirname } from '../../utils/path.ts'
+import type { Session, SessionExecuteOptions } from '../workspace/handle.ts'
+import type { ExecuteResult } from '../workspace/types.ts'
 import { FileVersionTracker, StaleMirageFileError } from './file_version.ts'
 import { decode, ioToStr, replaceText } from './io_text.ts'
 import { mediaOf, type WorkspaceMediaRead } from './read_file.ts'
@@ -29,6 +26,7 @@ export interface ToolResult {
   isError?: boolean
 }
 
+/** What an adapter takes to pick a session's tool table. */
 export interface MirageToolOperationsOptions {
   staleWriteProtection?: boolean
   /**
@@ -72,31 +70,35 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/**
+ * The agent tools for one session, independent of any agent framework.
+ * `session.tools` is the session's own table, shared by every caller in
+ * the process, so a read through one guards a write through another.
+ * Build one directly only to turn the guard off.
+ */
 export class MirageToolOperations {
   private readonly versions: FileVersionTracker
-  private readonly sessionId: string | undefined
-  private readonly shellOptions: ExecuteOptions
 
+  /**
+   * @param session The session the tools act as, with its cwd,
+   *   environment and mount grants.
+   * @param staleWriteProtection False lets an agent overwrite a file that
+   *   changed since it read it.
+   */
   constructor(
-    private readonly ws: Workspace,
-    options: MirageToolOperationsOptions = {},
+    private readonly session: Session,
+    staleWriteProtection = true,
   ) {
-    this.versions = new FileVersionTracker(
-      ws,
-      options.staleWriteProtection ?? true,
-      options.sessionId,
-    )
-    this.sessionId = options.sessionId
-    this.shellOptions = options.sessionId === undefined ? {} : { sessionId: options.sessionId }
+    this.versions = new FileVersionTracker(session.vfs, staleWriteProtection)
   }
 
-  private lineOptions(signal: AbortSignal | undefined): ExecuteOptions {
-    return signal === undefined ? this.shellOptions : { ...this.shellOptions, signal }
+  private lineOptions(signal: AbortSignal | undefined): SessionExecuteOptions {
+    return signal === undefined ? {} : { signal }
   }
 
   /** Run a line in the session's shell; `signal` aborts it, as in-app. */
   async shell(command: string, signal?: AbortSignal): Promise<ToolResult> {
-    return ioResult(await this.ws.shell(command, this.lineOptions(signal)))
+    return ioResult(await this.session.shell(command, this.lineOptions(signal)))
   }
 
   async read(path: string, offset = 0, limit = 2000): Promise<ToolResult> {
@@ -201,7 +203,7 @@ export class MirageToolOperations {
   }
 
   async ls(path: string, signal?: AbortSignal): Promise<ToolResult> {
-    return ioResult(await this.ws.shell(`ls ${shQuote(path)}`, this.lineOptions(signal)))
+    return ioResult(await this.session.shell(`ls ${shQuote(path)}`, this.lineOptions(signal)))
   }
 
   /**
@@ -235,7 +237,7 @@ export class MirageToolOperations {
     if (options.context !== undefined) words.push('-C', String(options.context))
     if (options.include !== undefined) words.push(shQuote(`--include=${options.include}`))
     words.push('-e', shQuote(pattern), shQuote(path))
-    const io = await this.ws.shell(words.join(' '), this.lineOptions(signal))
+    const io = await this.session.shell(words.join(' '), this.lineOptions(signal))
     const result = textResult(ioToStr(io))
     if (io.exitCode > 1) result.isError = true
     return result
@@ -243,7 +245,7 @@ export class MirageToolOperations {
 
   /**
    * Find files, not directories, whose path matches a pattern. The
-   * pattern is expanded by `Workspace.glob`, the shell's own resolver:
+   * pattern is expanded by `Session.glob`, the shell's own resolver:
    * `**` matches any number of directories, and a relative pattern is
    * matched under `path`. A symlink to a file counts; a dangling one does
    * not.
@@ -255,10 +257,10 @@ export class MirageToolOperations {
         : path.endsWith('/')
           ? `${path}${pattern}`
           : `${path}/${pattern}`
-    const matches = await this.ws.glob(full, this.sessionId)
+    const matches = await this.session.glob(full)
     const files: string[] = []
     for (const match of matches) {
-      if (await this.ws.vfs.isFile(match, this.sessionId)) files.push(match)
+      if (await this.session.vfs.isFile(match)) files.push(match)
     }
     return textResult(files.map((match) => `${match}\n`).join(''))
   }

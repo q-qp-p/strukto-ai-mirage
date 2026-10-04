@@ -16,14 +16,19 @@ import posixpath
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from mirage.agents.file_version import FileVersionTracker, StaleMirageFileError
-from mirage.agents.io_text import decode, io_to_str, replace_text
 from mirage.io.types import IOResult
 from mirage.ops.ops import Ops
 from mirage.utils.path import gnu_dirname
-from mirage.workspace.workspace import Workspace
+from mirage.workspace.tools.file_version import (
+    FileVersionTracker,
+    StaleMirageFileError,
+)
+from mirage.workspace.tools.io_text import decode, io_to_str, replace_text
+
+if TYPE_CHECKING:
+    from mirage.workspace.workspace.handle import Session
 
 DEFAULT_READ_LIMIT = 2000
 
@@ -99,27 +104,26 @@ async def ensure_parents(vfs: Ops, path: str) -> None:
 
 
 class MirageToolOperations:
-    """The agent tools, independent of any agent framework.
+    """The agent tools for one session, independent of any agent
+    framework.
+
+    ``session.tools`` is the session's own table, shared by every caller
+    in the process, so a read through one guards a write through
+    another. Build one directly only to turn the guard off.
 
     Args:
-        workspace (Workspace): The workspace the tools act on.
+        session (Session): The session the tools act as, with its cwd,
+            environment and mount grants.
         stale_write_protection (bool): False lets an agent overwrite a
             file that changed since it read it.
-        session_id (str | None): The session the tools act as, with its
-            cwd, environment and mount grants; None is the workspace's
-            default session.
     """
 
     def __init__(
-        self,
-        workspace: Workspace,
-        stale_write_protection: bool = True,
-        session_id: str | None = None,
+        self, session: "Session", stale_write_protection: bool = True
     ) -> None:
-        self._ws = workspace
-        self._session_id = session_id
+        self._session = session
         self._versions = FileVersionTracker(
-            workspace, stale_write_protection, session_id
+            session.vfs, stale_write_protection
         )
 
     async def shell(self, command: str) -> ToolResult:
@@ -131,9 +135,7 @@ class MirageToolOperations:
         Returns:
             ToolResult: The command's rendered output.
         """
-        return _io_result(
-            await self._ws.shell(command, session_id=self._session_id)
-        )
+        return _io_result(await self._session.shell(command))
 
     async def read(
         self, path: str, offset: int = 0, limit: int = DEFAULT_READ_LIMIT
@@ -244,11 +246,7 @@ class MirageToolOperations:
         Returns:
             ToolResult: The listing, or the failure.
         """
-        return _io_result(
-            await self._ws.shell(
-                f"ls {shlex.quote(path)}", session_id=self._session_id
-            )
-        )
+        return _io_result(await self._session.shell(f"ls {shlex.quote(path)}"))
 
     async def grep(
         self,
@@ -302,13 +300,13 @@ class MirageToolOperations:
         if include is not None:
             words.append(shlex.quote(f"--include={include}"))
         words += ["-e", shlex.quote(pattern), shlex.quote(path)]
-        io = await self._ws.shell(" ".join(words), session_id=self._session_id)
+        io = await self._session.shell(" ".join(words))
         return ToolResult(io_to_str(io), io.exit_code > 1)
 
     async def glob(self, pattern: str, path: str = "/") -> ToolResult:
         """Find files, not directories, whose path matches a pattern.
 
-        The pattern is expanded by ``Workspace.glob``, the shell's own
+        The pattern is expanded by ``Session.glob``, the shell's own
         resolver: ``**`` matches any number of directories, and a
         relative pattern is matched under ``path``. A symlink to a file
         counts; a dangling one does not.
@@ -320,13 +318,11 @@ class MirageToolOperations:
         Returns:
             ToolResult: One path per line, sorted.
         """
-        matches = await self._ws.glob(
-            posixpath.join(path, pattern), session_id=self._session_id
-        )
+        matches = await self._session.glob(posixpath.join(path, pattern))
         files = [
             match
             for match in matches
-            if await self._ws.vfs.is_file(match, session_id=self._session_id)
+            if await self._session.vfs.is_file(match)
         ]
         return ToolResult("".join(f"{match}\n" for match in files))
 
