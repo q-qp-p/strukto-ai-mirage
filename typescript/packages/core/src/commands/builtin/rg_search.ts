@@ -15,10 +15,9 @@
 import { AsyncLineIterator } from '../../io/async_line_iterator.ts'
 import { discardStreams } from '../../io/stream.ts'
 import { YieldBudget } from '../../io/yield_budget.ts'
-import { encodeText } from '../../shell/bytes.ts'
+import { decodeText, encodeText } from '../../shell/bytes.ts'
 import { byteOffset } from '../../shell/helpers.ts'
 import { requiredNeedles } from './grep_prefilter.ts'
-import { decodeLine, encodeLine } from './grep_offsets.ts'
 import { matchStart, matchText, userGroups } from './utils/pcre.ts'
 import type { TypeChange, TypeSelection } from './rg_filetypes.ts'
 
@@ -97,6 +96,11 @@ export interface RgFlags {
   // Unicode mode for either engine, on unless --no-unicode (or its alias
   // --no-pcre2-unicode) was given last.
   unicode: boolean
+  // -j, null when the line left ripgrep to pick.
+  threads: number | null
+  // -a, which turns binary detection off; `binary` is -a, --binary or -uuu,
+  // which also searches the files a walk would skip as binary.
+  text: boolean
 }
 
 /**
@@ -389,9 +393,91 @@ export class ByteCursor {
   }
 }
 
-/** What one haystack's search selected, beside what it printed. */
+/**
+ * What one haystack's search selected, beside what it printed: `binary` when
+ * a binary-file notice stood in for the lines, `skipped` when a walked
+ * binary file went unsearched, which no listing names but
+ * --files-without-match's status counts.
+ */
 export interface Tally {
   selected: boolean
+  binary?: boolean
+  skipped?: boolean
+}
+
+const RG_BUFFER_BYTES = 64 * 1024
+
+/**
+ * ripgrep's binary detection over one haystack's bytes.
+ *
+ * grep-searcher looks for NUL in what it reads, ripgrep 14.1.1 in one of
+ * three modes. `quit`, a walked file's: a NUL in the first 64 KiB leaves
+ * the whole file unsearched, and one past it ends the search there.
+ * `convert`, a file named on the line or any file under --binary: a NUL in
+ * the first 64 KiB (all a memory map checks) makes the file binary, its
+ * NULs read as line terminators, and a printed match gives way to one
+ * notice naming the first NUL's offset. `text`, under -a or --null-data:
+ * nothing is looked at. Mirrors Python's RgBinary.
+ */
+export class RgBinary {
+  offset: number | null = null
+
+  constructor(readonly mode: 'quit' | 'convert' | 'text') {}
+
+  /**
+   * The haystack's bytes, read the way the mode reads them. ripgrep checks
+   * what one read returned, at most 64 KiB, before it searches a line of it:
+   * a whole buffer for a file, whatever had arrived for a pipe. A served chunk
+   * is the pipe case, never waited past, and a chunk served whole is cut into
+   * buffers. A walked file's first buffer grows until it holds a whole line; a
+   * named file's first buffer is all a memory map checks.
+   */
+  async *read(source: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Array> {
+    let position = 0
+    for await (const chunk of source) {
+      if (this.mode === 'text') {
+        yield chunk
+        continue
+      }
+      let start = 0
+      while (start < chunk.length) {
+        let end = start + RG_BUFFER_BYTES
+        if (position === 0 && this.mode === 'quit') {
+          while (end < chunk.length && !chunk.subarray(start, end).includes(0x0a)) {
+            end += RG_BUFFER_BYTES
+          }
+        }
+        const block = chunk.subarray(start, end)
+        const at = block.indexOf(0)
+        if (at >= 0 && this.mode === 'quit') {
+          if (position === 0) this.offset = at
+          return
+        }
+        if (at >= 0 && position === 0) this.offset = at
+        position += block.length
+        start = end
+        yield this.converted(block)
+      }
+    }
+  }
+
+  /** Whether a walked file's first buffer held a NUL, so none of it was searched. */
+  get skipped(): boolean {
+    return this.mode === 'quit' && this.offset !== null
+  }
+
+  /** ripgrep's line for a binary file a printed match was found in. */
+  notice(label: string | null): Uint8Array {
+    const head = label === null ? '' : `${label}: `
+    return encodeText(
+      `${head}binary file matches (found "\\0" byte around offset ${String(this.offset)})\n`,
+    )
+  }
+
+  private converted(data: Uint8Array): Uint8Array {
+    if (this.offset === null) return data
+    return data.map((byte) => (byte === 0 ? 0x0a : byte))
+  }
 }
 
 function lstripAscii(text: string): string {
@@ -529,7 +615,7 @@ export class RgPrinter {
         body = this.exceeded(body, kept, isMatch, count)
       }
     }
-    return encodeLine(`${head}${body}${f.nullData ? '\0' : '\n'}`)
+    return encodeText(`${head}${body}${f.nullData ? '\0' : '\n'}`)
   }
 
   // What -M prints for a line longer than its limit.
@@ -644,7 +730,7 @@ async function listing(
     skipRecords(lines, needles, pat, f)
     const raw = await readRecord(lines, f, signal)
     if (raw === null) break
-    if (selects(pat, decodeLine(raw), f.invert)) {
+    if (selects(pat, decodeText(raw), f.invert)) {
       tally.selected = true
       return
     }
@@ -667,7 +753,7 @@ async function count(
     skipRecords(lines, needles, pat, f)
     const raw = await readRecord(lines, f, signal)
     if (raw === null) break
-    const text = decodeLine(raw)
+    const text = decodeText(raw)
     if (!selects(pat, text, f.invert)) {
       if (stop.armed) break
       stop.passesOver()
@@ -706,6 +792,8 @@ async function* printedLines(
   pat: RegExp,
   f: RgFlags,
   tally: Tally,
+  binary: RgBinary,
+  label: string | null,
   signal?: AbortSignal,
 ): AsyncGenerator<Uint8Array> {
   const context = printsContext(f)
@@ -728,8 +816,17 @@ async function* printedLines(
     index += 1
     const start = position
     position += raw.byteLength + 1
-    const text = decodeLine(raw)
+    const text = decodeText(raw)
     const hit = selects(pat, text, f.invert)
+    if (binary.offset !== null) {
+      // A binary file prints its notice at the first selected line and
+      // nothing else.
+      if (!hit) continue
+      tally.selected = true
+      tally.binary = true
+      yield binary.notice(label)
+      return
+    }
     if (!hit && stop.armed) {
       // The line that stops the file still prints as the context it is.
       if (f.passthru || afterLeft > 0) yield* printer.context(index, start, text)
@@ -751,7 +848,7 @@ async function* printedLines(
       if (context) {
         const first = held[0]?.[0] ?? index
         if (lastPrinted >= 0 && first > lastPrinted + 1 && f.contextSeparator !== null) {
-          yield encodeLine(f.contextSeparator + (f.nullData ? '\0' : '\n'))
+          yield encodeText(f.contextSeparator + (f.nullData ? '\0' : '\n'))
         }
         for (const [i, s, t] of held) yield* printer.context(i, s, t)
         held.length = 0
@@ -786,7 +883,9 @@ async function* printedLines(
  * line, and -m at its last one and that line's trailing context, so a pipe
  * that goes on past the answer is never waited on. `name` is the haystack's
  * path as printed, which -l and --files-without-match answer with; `label`
- * is the path each record leads with, null when the output names no file.
+ * is the path each record leads with, null when the output names no file;
+ * `named` says it was named on the line (or is stdin), which ripgrep
+ * searches past a NUL where a walked file is skipped.
  */
 export async function* searchHaystack(
   source: AsyncIterable<Uint8Array>,
@@ -796,29 +895,40 @@ export async function* searchHaystack(
   label: string | null,
   tally: Tally,
   signal?: AbortSignal,
+  named = true,
 ): AsyncGenerator<Uint8Array> {
   // ripgrep selects no line at all under -m0 and prints nothing, count and
   // listing included.
   if (f.maxCount === 0) return
-  const lines = new AsyncLineIterator(source)
+  const binary = new RgBinary(
+    f.text || f.nullData ? 'text' : named || f.binary ? 'convert' : 'quit',
+  )
+  const lines = new AsyncLineIterator(binary.read(source))
   try {
     if (f.quiet || f.filesOnly || f.filesWithoutMatch) {
       await listing(lines, pat, f, tally, signal)
+      if (binary.skipped) {
+        // A walked binary file was never searched, so it is in neither
+        // listing.
+        tally.skipped = true
+        return
+      }
       if (!f.quiet && tally.selected === f.filesOnly) {
-        yield encodeLine(name + (f.null || f.nullData ? '\0' : '\n'))
+        yield encodeText(name + (f.null || f.nullData ? '\0' : '\n'))
       }
       return
     }
     if (f.countOnly || f.countMatches) {
       const total = await count(lines, pat, f, tally, signal)
+      if (binary.skipped) return
       if (tally.selected || f.includeZero) {
         const head = label === null ? '' : label + (f.null ? '\0' : ':')
-        yield encodeLine(`${head}${String(total)}${f.nullData ? '\0' : '\n'}`)
+        yield encodeText(`${head}${String(total)}${f.nullData ? '\0' : '\n'}`)
       }
       return
     }
     const printer = new RgPrinter(f, pat, f.heading ? null : label)
-    yield* printedLines(lines, printer, pat, f, tally, signal)
+    yield* printedLines(lines, printer, pat, f, tally, binary, label, signal)
   } catch (error) {
     await discardStreams(source)
     throw error

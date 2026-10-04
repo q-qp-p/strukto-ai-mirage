@@ -17,7 +17,6 @@ from collections import deque
 from collections.abc import AsyncIterator, Iterable, Iterator
 from dataclasses import dataclass
 
-from mirage.commands.builtin.grep_offsets import decode_line, encode_line
 from mirage.commands.builtin.grep_prefilter import required_needles
 from mirage.commands.builtin.utils.pcre import (
     match_start,
@@ -27,6 +26,7 @@ from mirage.commands.builtin.utils.pcre import (
 from mirage.io.async_line_iterator import AsyncLineIterator
 from mirage.io.stream import discard_streams
 from mirage.io.yield_budget import YieldBudget
+from mirage.shell.bytes import decode_text, encode_text
 from mirage.shell.helpers import byte_offset
 
 # ripgrep's words for a line -M will not print whole (ripgrep 14.1.1).
@@ -47,6 +47,9 @@ class RgFlags:
     max_depth counts children at depth 1. null terminates filenames;
     null_data selects NUL-delimited records. type_changes preserves add/clear
     order; type_selections pairs each type name with an exclusion bit.
+    threads is -j, None when the line left ripgrep to pick. text is -a,
+    which turns binary detection off; binary is -a, --binary or -uuu,
+    which also searches the files a walk would skip as binary.
     """
 
     ignore_case: bool
@@ -101,6 +104,8 @@ class RgFlags:
     no_messages: bool
     null_data: bool = False
     engine: str = "default"
+    threads: int | None = None
+    text: bool = False
     unicode: bool = True
 
 
@@ -368,7 +373,7 @@ def smart_case_folds(pattern: str, fixed_string: bool) -> bool:
 
 
 def _byte_len(text: str) -> int:
-    return len(encode_line(text))
+    return len(encode_text(text))
 
 
 class ByteCursor:
@@ -377,7 +382,7 @@ class ByteCursor:
     rather than one per match.
 
     Args:
-        text (str): the line, from ``decode_line``.
+        text (str): the line, from ``decode_text``.
     """
 
     def __init__(self, text: str) -> None:
@@ -403,9 +408,95 @@ class Tally:
 
     Args:
         selected (bool): a line was selected.
+        binary (bool): a binary-file notice stood in for the lines.
+        skipped (bool): a walked binary file went unsearched, which no
+            listing names but --files-without-match's status counts.
     """
 
     selected: bool = False
+    binary: bool = False
+    skipped: bool = False
+
+
+RG_BUFFER_BYTES = 64 * 1024
+
+
+class RgBinary:
+    """ripgrep's binary detection over one haystack's bytes.
+
+    grep-searcher looks for NUL in what it reads, ripgrep 14.1.1 in one
+    of three modes. ``quit``, a walked file's: a NUL in the first 64 KiB
+    leaves the whole file unsearched, and one past it ends the search
+    there. ``convert``, a file named on the line or any file under
+    ``--binary``: a NUL in the first 64 KiB (all a memory map checks)
+    makes the file binary, its NULs read as line terminators, and a
+    printed match gives way to one notice naming the first NUL's offset.
+    ``text``, under -a or --null-data: nothing is looked at.
+
+    Args:
+        mode (str): ``quit``, ``convert`` or ``text``.
+    """
+
+    def __init__(self, mode: str) -> None:
+        self.mode = mode
+        self.offset: int | None = None
+
+    async def read(self, source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+        """The haystack's bytes, read the way the mode reads them.
+
+        ripgrep checks what one read returned, at most 64 KiB, before it
+        searches a line of it: a whole buffer for a file, whatever had
+        arrived for a pipe. A served chunk is the pipe case, never
+        waited past, and a chunk served whole is cut into buffers. A
+        walked file's first buffer grows until it holds a whole line;
+        a named file's first buffer is all a memory map checks.
+
+        Args:
+            source (AsyncIterator[bytes]): the haystack as served.
+        """
+        position = 0
+        async for chunk in source:
+            if self.mode == "text":
+                yield chunk
+                continue
+            start = 0
+            while start < len(chunk):
+                end = start + RG_BUFFER_BYTES
+                if position == 0 and self.mode == "quit":
+                    while end < len(chunk) and b"\n" not in chunk[start:end]:
+                        end += RG_BUFFER_BYTES
+                block = chunk[start:end]
+                at = block.find(b"\0")
+                if at >= 0 and self.mode == "quit":
+                    if position == 0:
+                        self.offset = at
+                    return
+                if at >= 0 and position == 0:
+                    self.offset = at
+                position += len(block)
+                start = end
+                yield self._converted(block)
+
+    def notice(self, label: str | None) -> bytes:
+        """ripgrep's line for a binary file a printed match was found in.
+
+        Args:
+            label (str | None): the path the output names, None for none.
+        """
+        head = "" if label is None else f"{label}: "
+        return encode_text(
+            f'{head}binary file matches (found "\\0" byte around '
+            f"offset {self.offset})\n"
+        )
+
+    @property
+    def skipped(self) -> bool:
+        """Whether a walked file's first buffer held a NUL, so ripgrep
+        searched none of it."""
+        return self.mode == "quit" and self.offset is not None
+
+    def _converted(self, data: bytes) -> bytes:
+        return data.replace(b"\0", b"\n") if self.offset is not None else data
 
 
 class RgPrinter:
@@ -439,7 +530,7 @@ class RgPrinter:
         Args:
             index (int): the line's 0-based index.
             start (int): the line's byte offset.
-            text (str): the line, from ``decode_line``.
+            text (str): the line, from ``decode_text``.
         """
         if self._f.only_matching:
             return list(
@@ -460,7 +551,7 @@ class RgPrinter:
         Args:
             index (int): the line's 0-based index.
             start (int): the line's byte offset.
-            text (str): the line, from ``decode_line``.
+            text (str): the line, from ``decode_text``.
         """
         f = self._f
         matches = (
@@ -591,7 +682,7 @@ class RgPrinter:
             _byte_len(body) + int(terminated) > f.max_columns
         ):
             body = self._exceeded(body, spans, is_match, count)
-        return encode_line(f"{head}{body}") + (b"\0" if f.null_data else b"\n")
+        return encode_text(f"{head}{body}") + (b"\0" if f.null_data else b"\n")
 
     def _exceeded(
         self,
@@ -720,7 +811,7 @@ async def _listing(
         tally (Tally): receives the selection.
     """
     async for raw, _, _ in _records(lines, f, pat):
-        if _selects(pat, decode_line(raw), f.invert):
+        if _selects(pat, decode_text(raw), f.invert):
             tally.selected = True
             return
 
@@ -740,7 +831,7 @@ async def _count(
     selected = 0
     stop = nonmatch_stop(f)
     async for raw, _, _ in _records(lines, f, pat):
-        text = decode_line(raw)
+        text = decode_text(raw)
         if not _selects(pat, text, f.invert):
             if stop.armed:
                 break
@@ -763,12 +854,14 @@ async def _count(
     return count
 
 
-async def _lines(
+async def _printed_lines(
     lines: AsyncLineIterator,
     printer: RgPrinter,
     pat: re.Pattern[str],
     f: RgFlags,
     tally: Tally,
+    binary: RgBinary,
+    label: str | None,
 ) -> AsyncIterator[bytes]:
     """The printed lines of one haystack, context and all.
 
@@ -787,6 +880,10 @@ async def _lines(
         pat (re.Pattern[str]): the compiled pattern.
         f (RgFlags): the parsed flags.
         tally (Tally): receives the selection.
+        binary (RgBinary): the haystack's binary detection; a binary
+            file prints its notice at the first selected line and
+            nothing else.
+        label (str | None): the path the notice leads with.
     """
     context = prints_context(f)
     held: deque[tuple[int, int, str]] = deque(
@@ -805,8 +902,15 @@ async def _lines(
         index += 1
         start = position
         position += len(raw) + 1
-        text = decode_line(raw)
+        text = decode_text(raw)
         hit = _selects(pat, text, f.invert)
+        if binary.offset is not None:
+            if hit:
+                tally.selected = True
+                tally.binary = True
+                yield binary.notice(label)
+                return
+            continue
         if not hit and stop.armed:
             # The line that stops the file still prints as the context
             # it is.
@@ -831,7 +935,7 @@ async def _lines(
                     and first > last_printed + 1
                     and f.context_separator is not None
                 ):
-                    yield encode_line(f.context_separator) + (
+                    yield encode_text(f.context_separator) + (
                         b"\0" if f.null_data else b"\n"
                     )
                 for i, s, t in held:
@@ -875,6 +979,7 @@ async def search_haystack(
     name: str,
     label: str | None,
     tally: Tally,
+    named: bool = True,
 ) -> AsyncIterator[bytes]:
     """One haystack's output as ripgrep prints it, read no further than
     the answer needs: -q, -l and --files-without-match stop at the first
@@ -890,26 +995,43 @@ async def search_haystack(
         label (str | None): the path each record leads with, None when
             the output names no file.
         tally (Tally): receives whether a line was selected.
+        named (bool): the haystack was named on the line (or is stdin),
+            which ripgrep searches past a NUL where a walked file is
+            skipped.
     """
     if f.max_count == 0:
         # ripgrep selects no line at all under -m0 and prints nothing,
         # count and listing included.
         return
-    lines = AsyncLineIterator(source)
+    binary = RgBinary(
+        "text"
+        if f.text or f.null_data
+        else "convert"
+        if named or f.binary
+        else "quit"
+    )
+    lines = AsyncLineIterator(binary.read(source))
     try:
         if f.quiet or f.files_only or f.files_without_match:
             await _listing(lines, pat, f, tally)
+            if binary.skipped:
+                # A walked binary file was never searched, so it is in
+                # neither listing.
+                tally.skipped = True
+                return
             if not f.quiet and tally.selected == f.files_only:
-                yield encode_line(name) + (
+                yield encode_text(name) + (
                     b"\0" if f.null or f.null_data else b"\n"
                 )
             return
         if f.count_only or f.count_matches:
             count = await _count(lines, pat, f, tally)
+            if binary.skipped:
+                return
             if tally.selected or f.include_zero:
                 head = b""
                 if label is not None:
-                    head = encode_line(label) + (b"\0" if f.null else b":")
+                    head = encode_text(label) + (b"\0" if f.null else b":")
                 yield (
                     head
                     + str(count).encode()
@@ -917,7 +1039,9 @@ async def search_haystack(
                 )
             return
         printer = RgPrinter(f, pat, None if f.heading else label)
-        async for chunk in _lines(lines, printer, pat, f, tally):
+        async for chunk in _printed_lines(
+            lines, printer, pat, f, tally, binary, label
+        ):
             yield chunk
     except BaseException as exc:
         if not isinstance(exc, GeneratorExit):

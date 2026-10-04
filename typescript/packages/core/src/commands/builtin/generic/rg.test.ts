@@ -280,11 +280,12 @@ describe('rgGeneric - an operand the walk refused', () => {
   ] as const)('refuses %s by name', async (_, operand, message) => {
     // ripgrep 14.1.1: `rg o ''` and `rg o lp1` (a loop) refuse the operand by
     // name with exit 2. The empty name's `virtual` is the cwd it joined onto,
-    // which must not be walked.
+    // which must not be walked. Beside another operand the parallel walker
+    // names it once.
     expect(await runAll([operand])).toEqual(['', message, 2])
     expect(await runAll([spec('/a.txt'), operand])).toEqual([
       '/a.txt:hello\n/a.txt:world\n',
-      message,
+      message.replace(/IO error for operation on [^:]*: /, ''),
       2,
     ])
   })
@@ -383,7 +384,11 @@ describe('rg -L', () => {
   // glob-excluded, each named as the walker spells it: `./x` under the
   // implicit cwd, whose matches print bare (ripgrep 14.1.1).
   it.each([
-    ["ln -s nowhere s/.dang && rg -L -g '*.txt' o s", '', dang('s/.dang')],
+    [
+      "ln -s nowhere s/.dang && rg -L -g '*.txt' o s",
+      '',
+      'rg: s/.dang: No such file or directory (os error 2)\n',
+    ],
     [
       'ln -s lp2 s/lp1 && ln -s lp1 s/lp2 && rg -L --sort path o s',
       's/f:o\n',
