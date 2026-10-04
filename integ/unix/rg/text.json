@@ -114,6 +114,36 @@
         "files-without-match",
         "q"
       ]
+    },
+    {
+      "id": "rg_finds_a_nul_past_the_first_backend_chunk",
+      "seq": 15800084,
+      "targets": [
+        "ram",
+        "disk",
+        "redis",
+        "opfs",
+        "s3",
+        "databricks",
+        "gridfs",
+        "s3-prefix",
+        "databricks-prefix",
+        "gridfs-prefix",
+        "dropbox",
+        "dropbox-root",
+        "onedrive",
+        "sharepoint",
+        "sharepoint-prefix",
+        "ssh",
+        "nextcloud",
+        "box"
+      ],
+      "command": "mkdir -p /data/rgb8 && printf 'needle\\n' > /data/rgb8/f && printf '%010000d\\n' 0 | tr 0 x >> /data/rgb8/f && printf 'a\\0b\\n' >> /data/rgb8/f && rg needle /data/rgb8/f; echo rc=$?; rg needle /data/rgb8; echo rc=$?; rg -c needle /data/rgb8/f; echo rc=$?; rg -l needle /data/rgb8; echo rc=$?; rm -r /data/rgb8",
+      "expect": {
+        "exit": 0,
+        "stdout": "binary file matches (found \"\\0\" byte around offset 10009)\nrc=0\nrc=1\n1\nrc=0\nrc=1\n",
+        "stderr": ""
+      }
     }
   ]
 }

@@ -998,7 +998,7 @@ async def _search_single(
     io = IOResult(exit_code=1)
     tally = Tally()
     return _settled(
-        search_haystack(source, pat, f, name, label, tally),
+        search_haystack(source, pat, f, name, label, tally, pipe=is_stdin(p)),
         f,
         label,
         tally,
@@ -1298,7 +1298,14 @@ async def _search_all(
             chunks = [
                 c
                 async for c in search_haystack(
-                    source, pat, f, name, label, tally, not walked
+                    source,
+                    pat,
+                    f,
+                    name,
+                    label,
+                    tally,
+                    not walked,
+                    h.spec is not None and is_stdin(h.spec),
                 )
             ]
         except FS_ERRORS as exc:

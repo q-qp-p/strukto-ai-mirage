@@ -740,7 +740,7 @@ async function searchSingle(
   const tally: Tally = { selected: false }
   return [
     settled(
-      searchHaystack(stream(p), pat, f, name, label, tally, signal),
+      searchHaystack(stream(p), pat, f, name, label, tally, signal, true, isStdin(p)),
       f,
       label,
       tally,
@@ -958,7 +958,18 @@ async function searchAll(
         h.spec === null && h.door !== null
           ? h.door.read(h.virtual)
           : stream(h.spec ?? makeSpec(h.virtual, template))
-      for await (const c of searchHaystack(source, pat, f, name, label, tally, signal, !walked)) {
+      const pipe = h.spec !== null && isStdin(h.spec)
+      for await (const c of searchHaystack(
+        source,
+        pat,
+        f,
+        name,
+        label,
+        tally,
+        signal,
+        !walked,
+        pipe,
+      )) {
         chunks.push(c)
       }
     } catch (err) {

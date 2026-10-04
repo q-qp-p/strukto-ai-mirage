@@ -13,7 +13,8 @@
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import { AsyncLineIterator } from '../../io/async_line_iterator.ts'
-import { discardStreams } from '../../io/stream.ts'
+import { concat } from '../../io/cachable_iterator.ts'
+import { closeQuietly, discardStreams } from '../../io/stream.ts'
 import { YieldBudget } from '../../io/yield_budget.ts'
 import { decodeText, encodeText } from '../../shell/bytes.ts'
 import { byteOffset } from '../../shell/helpers.ts'
@@ -426,39 +427,61 @@ export class RgBinary {
 
   /**
    * The haystack's bytes, read the way the mode reads them. ripgrep checks
-   * what one read returned, at most 64 KiB, before it searches a line of it:
-   * a whole buffer for a file, whatever had arrived for a pipe. A served chunk
-   * is the pipe case, never waited past, and a chunk served whole is cut into
-   * buffers. A walked file's first buffer grows until it holds a whole line; a
-   * named file's first buffer is all a memory map checks.
+   * what one read returned, at most 64 KiB, before it searches a line of it.
+   * `pipe` says the haystack is stdin, whose read returns what has arrived; a
+   * file's read fills the buffer.
    */
-  async *read(source: AsyncIterable<Uint8Array>): AsyncGenerator<Uint8Array> {
+  async *read(source: AsyncIterable<Uint8Array>, pipe = false): AsyncGenerator<Uint8Array> {
+    if (this.mode === 'text') {
+      yield* source
+      return
+    }
     let position = 0
-    for await (const chunk of source) {
-      if (this.mode === 'text') {
-        yield chunk
-        continue
+    for await (const block of this.reads(source, pipe)) {
+      const at = block.indexOf(0)
+      if (at >= 0 && this.mode === 'quit') {
+        if (position === 0) this.offset = at
+        return
       }
-      let start = 0
-      while (start < chunk.length) {
-        let end = start + RG_BUFFER_BYTES
-        if (position === 0 && this.mode === 'quit') {
-          while (end < chunk.length && !chunk.subarray(start, end).includes(0x0a)) {
+      if (at >= 0 && position === 0) this.offset = at
+      position += block.length
+      yield this.converted(block)
+    }
+  }
+
+  /**
+   * The reads ripgrep's buffer makes of the haystack. A pipe's read is
+   * whatever had arrived, so each served chunk is one, never waited past, and
+   * one longer than the buffer is cut into buffers. A file's first read fills
+   * the buffer, since the binary decision rests on it, so the chunks a backend
+   * serves (8 KiB from disk and S3) are joined until it is whole; later reads
+   * take what has arrived, so a search never waits past its answer. A walked
+   * file's first buffer grows until it holds a whole line; a named file's
+   * first buffer is all a memory map checks.
+   */
+  private async *reads(
+    source: AsyncIterable<Uint8Array>,
+    pipe: boolean,
+  ): AsyncGenerator<Uint8Array> {
+    let held: Uint8Array = new Uint8Array(0)
+    let first = true
+    for await (const chunk of source) {
+      held = held.length === 0 ? chunk : concat([held, chunk])
+      while (held.length > 0) {
+        let end = RG_BUFFER_BYTES
+        if (first && this.mode === 'quit') {
+          while (end < held.length && !held.subarray(0, end).includes(0x0a)) {
             end += RG_BUFFER_BYTES
           }
+          if (!pipe && !held.subarray(0, end).includes(0x0a)) break
         }
-        const block = chunk.subarray(start, end)
-        const at = block.indexOf(0)
-        if (at >= 0 && this.mode === 'quit') {
-          if (position === 0) this.offset = at
-          return
-        }
-        if (at >= 0 && position === 0) this.offset = at
-        position += block.length
-        start = end
-        yield this.converted(block)
+        if (first && !pipe && held.length < end) break
+        yield held.subarray(0, end)
+        held = held.subarray(end)
+        first = false
       }
     }
+    if (held.length > 0) yield held
   }
 
   /** Whether a walked file's first buffer held a NUL, so none of it was searched. */
@@ -885,7 +908,9 @@ async function* printedLines(
  * path as printed, which -l and --files-without-match answer with; `label`
  * is the path each record leads with, null when the output names no file;
  * `named` says it was named on the line (or is stdin), which ripgrep
- * searches past a NUL where a walked file is skipped.
+ * searches past a NUL where a walked file is skipped; `pipe` says it is
+ * stdin, read as it arrives. Whatever stops the search closes the haystack's
+ * reader.
  */
 export async function* searchHaystack(
   source: AsyncIterable<Uint8Array>,
@@ -896,14 +921,19 @@ export async function* searchHaystack(
   tally: Tally,
   signal?: AbortSignal,
   named = true,
+  pipe = false,
 ): AsyncGenerator<Uint8Array> {
   // ripgrep selects no line at all under -m0 and prints nothing, count and
   // listing included.
-  if (f.maxCount === 0) return
+  if (f.maxCount === 0) {
+    await closeQuietly(source)
+    return
+  }
   const binary = new RgBinary(
     f.text || f.nullData ? 'text' : named || f.binary ? 'convert' : 'quit',
   )
-  const lines = new AsyncLineIterator(binary.read(source))
+  const reader = binary.read(source, pipe)
+  const lines = new AsyncLineIterator(reader)
   try {
     if (f.quiet || f.filesOnly || f.filesWithoutMatch) {
       await listing(lines, pat, f, tally, signal)
@@ -932,5 +962,8 @@ export async function* searchHaystack(
   } catch (error) {
     await discardStreams(source)
     throw error
+  } finally {
+    await closeQuietly(reader)
+    await closeQuietly(source)
   }
 }

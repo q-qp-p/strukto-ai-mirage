@@ -126,7 +126,9 @@ describe('rgGeneric - operand', () => {
 
 // A listing is settled by the first selected line and -m once its last
 // selected line (and that line's trailing context) is out, so a source that
-// goes on is never read past the answer: `-` is a typed stdin operand.
+// goes on is never read past the answer: `-` is a typed stdin operand. A file
+// is read a whole first buffer at a time, as ripgrep reads one, so the file
+// row serves one before it goes on.
 it.each([
   ['stdin', [], { files_without_match: true }, '', 1],
   ['stdin', ['-'], { files_with_matches: true }, '<stdin>\n', 0],
@@ -140,7 +142,7 @@ it.each([
   ['file', ['/a.txt'], { max_count: '1', with_filename: true }, '/a.txt:b\n', 0],
 ])('stops reading %s at the answer: %j %j', async (source, paths, flags, want, code) => {
   const operands = paths.map((p) => (p === '-' ? stdinOperand() : spec(p)))
-  const pipe = pipeThatGoesOn('a\nb\nc\n')
+  const pipe = pipeThatGoesOn('a\nb\nc\n' + (source === 'file' ? 'd\n'.repeat(32768) : ''))
   const result =
     source === 'stdin'
       ? await run(operands, 'b', flags, pipe)

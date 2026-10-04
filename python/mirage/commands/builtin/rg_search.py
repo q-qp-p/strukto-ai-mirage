@@ -24,7 +24,7 @@ from mirage.commands.builtin.utils.pcre import (
     user_groups,
 )
 from mirage.io.async_line_iterator import AsyncLineIterator
-from mirage.io.stream import discard_streams
+from mirage.io.stream import close_quietly, discard_streams
 from mirage.io.yield_budget import YieldBudget
 from mirage.shell.bytes import decode_text, encode_text
 from mirage.shell.helpers import byte_offset
@@ -441,41 +441,71 @@ class RgBinary:
         self.mode = mode
         self.offset: int | None = None
 
-    async def read(self, source: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+    async def read(
+        self, source: AsyncIterator[bytes], pipe: bool = False
+    ) -> AsyncIterator[bytes]:
         """The haystack's bytes, read the way the mode reads them.
 
         ripgrep checks what one read returned, at most 64 KiB, before it
-        searches a line of it: a whole buffer for a file, whatever had
-        arrived for a pipe. A served chunk is the pipe case, never
-        waited past, and a chunk served whole is cut into buffers. A
-        walked file's first buffer grows until it holds a whole line;
-        a named file's first buffer is all a memory map checks.
+        searches a line of it.
 
         Args:
             source (AsyncIterator[bytes]): the haystack as served.
+            pipe (bool): the haystack is stdin, whose read returns what
+                has arrived; a file's read fills the buffer.
         """
-        position = 0
-        async for chunk in source:
-            if self.mode == "text":
+        if self.mode == "text":
+            async for chunk in source:
                 yield chunk
-                continue
-            start = 0
-            while start < len(chunk):
-                end = start + RG_BUFFER_BYTES
-                if position == 0 and self.mode == "quit":
-                    while end < len(chunk) and b"\n" not in chunk[start:end]:
-                        end += RG_BUFFER_BYTES
-                block = chunk[start:end]
-                at = block.find(b"\0")
-                if at >= 0 and self.mode == "quit":
-                    if position == 0:
-                        self.offset = at
-                    return
-                if at >= 0 and position == 0:
+            return
+        position = 0
+        async for block in self._reads(source, pipe):
+            at = block.find(b"\0")
+            if at >= 0 and self.mode == "quit":
+                if position == 0:
                     self.offset = at
-                position += len(block)
-                start = end
-                yield self._converted(block)
+                return
+            if at >= 0 and position == 0:
+                self.offset = at
+            position += len(block)
+            yield self._converted(block)
+
+    async def _reads(
+        self, source: AsyncIterator[bytes], pipe: bool
+    ) -> AsyncIterator[bytes]:
+        """The reads ripgrep's buffer makes of the haystack.
+
+        A pipe's read is whatever had arrived, so each served chunk is
+        one, never waited past, and one longer than the buffer is cut
+        into buffers. A file's first read fills the buffer, since the
+        binary decision rests on it, so the chunks a backend serves (8
+        KiB from disk and S3) are joined until it is whole; later reads
+        take what has arrived, so a search never waits past its answer.
+        A walked file's first buffer grows until it holds a whole line; a
+        named file's first buffer is all a memory map checks.
+
+        Args:
+            source (AsyncIterator[bytes]): the haystack as served.
+            pipe (bool): each served chunk is one read.
+        """
+        held = b""
+        first = True
+        async for chunk in source:
+            held = held + chunk if held else chunk
+            while held:
+                end = RG_BUFFER_BYTES
+                if first and self.mode == "quit":
+                    while end < len(held) and b"\n" not in held[:end]:
+                        end += RG_BUFFER_BYTES
+                    if not pipe and b"\n" not in held[:end]:
+                        break
+                if first and not pipe and len(held) < end:
+                    break
+                yield held[:end]
+                held = held[end:]
+                first = False
+        if held:
+            yield held
 
     def notice(self, label: str | None) -> bytes:
         """ripgrep's line for a binary file a printed match was found in.
@@ -980,11 +1010,13 @@ async def search_haystack(
     label: str | None,
     tally: Tally,
     named: bool = True,
+    pipe: bool = False,
 ) -> AsyncIterator[bytes]:
     """One haystack's output as ripgrep prints it, read no further than
     the answer needs: -q, -l and --files-without-match stop at the first
     selected line, and -m at its last one and that line's trailing
     context, so a pipe that goes on past the answer is never waited on.
+    Whatever stops the search closes the haystack's reader.
 
     Args:
         source (AsyncIterator[bytes]): the haystack's bytes.
@@ -998,10 +1030,12 @@ async def search_haystack(
         named (bool): the haystack was named on the line (or is stdin),
             which ripgrep searches past a NUL where a walked file is
             skipped.
+        pipe (bool): the haystack is stdin, read as it arrives.
     """
     if f.max_count == 0:
         # ripgrep selects no line at all under -m0 and prints nothing,
         # count and listing included.
+        await close_quietly(source)
         return
     binary = RgBinary(
         "text"
@@ -1010,7 +1044,8 @@ async def search_haystack(
         if named or f.binary
         else "quit"
     )
-    lines = AsyncLineIterator(binary.read(source))
+    reader = binary.read(source, pipe)
+    lines = AsyncLineIterator(reader)
     try:
         if f.quiet or f.files_only or f.files_without_match:
             await _listing(lines, pat, f, tally)
@@ -1047,3 +1082,6 @@ async def search_haystack(
         if not isinstance(exc, GeneratorExit):
             await discard_streams(source)
         raise
+    finally:
+        await close_quietly(reader)
+        await close_quietly(source)
