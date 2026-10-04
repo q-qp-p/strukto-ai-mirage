@@ -26,6 +26,7 @@ import { runPaste } from './paste.ts'
 import { runSed } from './sed.ts'
 import { runSort } from './sort.ts'
 import { runTar } from './tar.ts'
+import { runTee } from './tee.ts'
 import { runUnzip } from './unzip.ts'
 import { runWc } from './wc.ts'
 import { runZip } from './zip_cmd.ts'
@@ -80,13 +81,14 @@ export async function runRelay(
   if (cmdName === Cmd.WC) return runWc(scopes, flagKwargs, dispatch, runSingle)
   if (cmdName === Cmd.SORT) return runSort(scopes, flagKwargs, dispatch, stdin)
   if (cmdName === Cmd.LS) return runLs(scopes, flagKwargs, dispatch, ns, sessionView)
-  if (cmdName === Cmd.CP) return runCp(scopes, flagKwargs, dispatch, storageKey, ns, cwd)
-  if (cmdName === Cmd.MV) return runMv(scopes, flagKwargs, dispatch, storageKey, ns)
+  if (cmdName === Cmd.CP) return runCp(scopes, flagKwargs, dispatch, storageKey, ns, cwd, stdin)
+  if (cmdName === Cmd.MV) return runMv(scopes, flagKwargs, dispatch, storageKey, ns, stdin)
   if (cmdName === Cmd.DIFF) return runDiff(scopes, flagKwargs, dispatch, stdin)
   if (cmdName === Cmd.PASTE) return runPaste(scopes, flagKwargs, dispatch, stdin)
   if (cmdName === Cmd.COMM) return runComm(scopes, flagKwargs, dispatch, stdin)
   if (cmdName === Cmd.JOIN) return runJoin(scopes, flagKwargs, dispatch, stdin)
   if (cmdName === Cmd.TAR) return runTar(scopes, textArgs, flagKwargs, dispatch, ns, stdin)
+  if (cmdName === Cmd.TEE) return runTee(scopes, flagKwargs, dispatch, stdin)
   if (cmdName === Cmd.UNZIP) return runUnzip(scopes, textArgs, flagKwargs, dispatch)
   if (cmdName === Cmd.ZIP) return runZip(scopes, flagKwargs, dispatch, ns)
   const builder = DISPATCH_BUILDERS.get(cmdName)

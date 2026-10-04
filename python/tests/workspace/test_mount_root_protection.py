@@ -73,13 +73,13 @@ def _run(coro):
 
 
 def test_rm_refuses_mount_root():
-
+    # Without -r a mount root is a directory first, as GNU says of a mount
+    # point (coreutils 9.7).
     async def go():
         ws = _ws_two_mounts()
         r = await _exec(ws, "rm /r2")
         assert r.exit_code == 1
-        assert b"Device or resource busy" in (r.stderr or b"")
-        assert b"/r2" in (r.stderr or b"")
+        assert r.stderr == b"rm: cannot remove '/r2': Is a directory\n"
 
     _run(go())
 
@@ -516,16 +516,23 @@ def test_rm_one_file_system_removes_within_mount():
 
 
 def test_rm_no_preserve_root_still_cannot_remove_mount_root():
-    # mirage protection is structural: --no-preserve-root does not disable it.
+    # mirage protection is structural: --no-preserve-root does not disable
+    # it, and / gets GNU's own failsafe first (coreutils 9.7).
     async def go():
         ws = _ws_two_mounts()
-        for cmd in (
-            "rm --preserve-root -rf /",
-            "rm --no-preserve-root -rf /r2",
+        for cmd, refusal in (
+            (
+                "rm --preserve-root -rf /",
+                b"rm: it is dangerous to operate recursively on '/'\n"
+                b"rm: use --no-preserve-root to override this failsafe\n",
+            ),
+            (
+                "rm --no-preserve-root -rf /r2",
+                b"rm: cannot remove '/r2': Device or resource busy\n",
+            ),
         ):
             r = await _exec(ws, cmd)
-            assert r.exit_code == 1
-            assert b"Device or resource busy" in (r.stderr or b"")
+            assert (r.exit_code, r.stderr) == (1, refusal)
 
     _run(go())
 

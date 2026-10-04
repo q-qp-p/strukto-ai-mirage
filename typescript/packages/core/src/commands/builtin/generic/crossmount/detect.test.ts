@@ -32,12 +32,13 @@ describe('strategyFor — mirrors tests/commands/builtin/generic/crossmount/test
 
   it.each([
     [Strategy.STREAM, [Cmd.CAT, Cmd.NL, Cmd.CUT]],
-    [Strategy.FANOUT, [Cmd.HEAD, Cmd.SHA256SUM, Cmd.RM, Cmd.TEE, Cmd.REV]],
+    [Strategy.FANOUT, [Cmd.HEAD, Cmd.SHA256SUM, Cmd.RM, Cmd.REV]],
     [
       Strategy.RELAY,
       [
         Cmd.CP,
         Cmd.MV,
+        Cmd.TEE,
         Cmd.DIFF,
         Cmd.CMP,
         Cmd.SORT,

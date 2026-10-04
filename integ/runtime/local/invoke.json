@@ -88,6 +88,138 @@
           }
         }
       ]
+    },
+    {
+      "id": "module_flag_runs_a_module_or_names_the_missing_one",
+      "world": {
+        "runtimes": [
+          "local"
+        ],
+        "mounts": {
+          "/ram": {
+            "vfs": "ram"
+          }
+        }
+      },
+      "steps": [
+        {
+          "command": "python3 -m json.tool --help",
+          "expect": {
+            "exit": 0,
+            "stdout_contains": "json.tool",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 -m nosuchmod",
+          "expect": {
+            "exit": 1,
+            "stdout": "",
+            "stderr": "python3: No module named nosuchmod\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "argv0_and_file_follow_cpython",
+      "world": {
+        "runtimes": [
+          "local"
+        ],
+        "mounts": {
+          "/ram": {
+            "vfs": "ram",
+            "files": {
+              "f.py": "import sys\nprint(sys.argv[0], __file__)\n"
+            }
+          }
+        }
+      },
+      "steps": [
+        {
+          "command": "echo 'import sys; print(sys.argv[0])' | python3 - a",
+          "expect": {
+            "exit": 0,
+            "stdout": "-\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "cd /ram && python3 f.py",
+          "expect": {
+            "exit": 0,
+            "stdout": "f.py /ram/f.py\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "cat /ram/f.py | python3",
+          "expect": {
+            "exit": 0,
+            "stdout": " <stdin>\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 -c 'print(__file__)'",
+          "expect": {
+            "exit": 1,
+            "stderr_contains": "NameError: name '__file__' is not defined"
+          }
+        },
+        {
+          "command": "test \"$(python3 --version)\" = \"Python $(python3 -c 'import sys; print(sys.version.split()[0])')\" && echo same",
+          "expect": {
+            "exit": 0,
+            "stdout": "same\n",
+            "stderr": ""
+          }
+        }
+      ]
+    },
+    {
+      "id": "command_and_unset_restore_the_handoff",
+      "world": {
+        "runtimes": [
+          "local",
+          "workspace"
+        ],
+        "mounts": {
+          "/ram": {
+            "vfs": "ram"
+          }
+        }
+      },
+      "steps": [
+        {
+          "command": "python3() { echo \"$@\"; }",
+          "expect": {
+            "exit": 0
+          }
+        },
+        {
+          "command": "command python3 -c \"import sys; print(sys.argv)\" -u x",
+          "expect": {
+            "exit": 0,
+            "stdout": "['-c', '-u', 'x']\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "unset -f python3",
+          "expect": {
+            "exit": 0
+          }
+        },
+        {
+          "command": "python3 -c \"import sys; print(sys.argv)\" -u x",
+          "expect": {
+            "exit": 0,
+            "stdout": "['-c', '-u', 'x']\n",
+            "stderr": ""
+          }
+        }
+      ]
     }
   ]
 }

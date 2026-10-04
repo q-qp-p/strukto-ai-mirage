@@ -74,12 +74,13 @@ def test_sets_are_disjoint():
     "strategy,names",
     [
         (Strategy.STREAM, ("cat", "nl", "cut")),
-        (Strategy.FANOUT, ("head", "sha256sum", "rm", "tee", "rev")),
+        (Strategy.FANOUT, ("head", "sha256sum", "rm", "rev")),
         (
             Strategy.RELAY,
             (
                 "cp",
                 "mv",
+                "tee",
                 "diff",
                 "cmp",
                 "sort",

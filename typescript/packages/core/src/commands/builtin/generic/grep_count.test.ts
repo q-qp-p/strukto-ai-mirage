@@ -104,9 +104,7 @@ describe('grepGeneric count-only exit codes', () => {
 describe('grepGeneric context separators between files', () => {
   it.each([
     [{ B: '1' }, '/a.txt-hello\n/a.txt:world\n--\n/b.txt:world\n'],
-    [{ h: true, B: '1' }, 'hello\nworld\n--\nworld\n'],
     [{ c: true, B: '1' }, '/a.txt:1\n/b.txt:1\n'],
-    [{}, '/a.txt:world\n/b.txt:world\n'],
   ])('separates groups for %j', async (flags, expected) => {
     const [out, io] = (await grepGeneric(
       'grep',

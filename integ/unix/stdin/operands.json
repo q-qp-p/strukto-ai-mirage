@@ -1379,6 +1379,21 @@
         "stdout": "rc=1\n",
         "stderr": "join: -:2: is not sorted: a 2\njoin: input is not in sorted order\n"
       }
+    },
+    {
+      "id": "shell_stdin_gunzip_writes_a_dash_to_stdout_beside_files",
+      "seq": 15100401,
+      "targets": [
+        "ram",
+        "opfs",
+        "disk"
+      ],
+      "command": "(cd /data && printf 'file\\n' > fcA_sio && gzip fcA_sio && printf 'hi\\n' | gzip | gunzip - fcA_sio.gz && ls fcA_sio* && cat fcA_sio; rm -f fcA_sio)",
+      "expect": {
+        "exit": 0,
+        "stdout": "hi\nfcA_sio\nfile\n",
+        "stderr": ""
+      }
     }
   ]
 }

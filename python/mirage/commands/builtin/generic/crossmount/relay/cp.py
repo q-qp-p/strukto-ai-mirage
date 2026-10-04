@@ -27,6 +27,7 @@ from mirage.commands.builtin.generic.crossmount.utils import (
 from mirage.commands.spec import SPECS
 from mirage.commands.spec.flag_view import FlagView
 from mirage.commands.spec.types import FlagValue
+from mirage.io.types import ByteSource
 from mirage.ops.types import LinkSubtree, MountView, NamespaceView
 from mirage.runtime.types import DispatchFn
 from mirage.types import FileStat, PathSpec, PrimitiveCopy
@@ -86,6 +87,7 @@ async def run_cp(
     storage_key: Callable[[PathSpec], str] | None = None,
     ns: NamespaceView | None = None,
     cwd: str = "/",
+    stdin: ByteSource | None = None,
 ) -> CrossResult:
     """Copy operands that span mounts via the shared generic cp.
 
@@ -103,6 +105,7 @@ async def run_cp(
             that does not follow them recreates by name.
         cwd (str): The working directory a typed link source resolves
             against.
+        stdin (ByteSource | None): where ``-i`` reads its answers.
     """
     fl = FlagView(flag_kwargs, spec=SPECS["cp"])
     primitives = transfer_primitives(dispatch)
@@ -140,4 +143,5 @@ async def run_cp(
             if links is not None
             else None
         ),
+        stdin=stdin,
     )

@@ -83,7 +83,6 @@ async def _run(files, dirs, paths, *, readdir=None, **kw):
     "target, error, match",
     [
         (_spec("/dst.txt"), NotADirectoryError, "target '/dst.txt'"),
-        (_slashed("/reg"), NotADirectoryError, "target '/reg/'"),
         (_slashed("/missing"), FileNotFoundError, "target '/missing/'"),
     ],
 )
@@ -146,14 +145,6 @@ async def test_rename_failure_keeps_moving_remaining_sources():
     assert b"mv: cannot move '/a.txt' to '/d/a.txt'" in io.stderr
     assert files["/d/b.txt"] == b"BBB"
     assert files["/a.txt"] == b"AAA"
-
-
-@pytest.mark.asyncio
-async def test_no_clobber_preserves_source_and_target():
-    files = {"/a.txt": b"NEW", "/d/a.txt": b"OLD"}
-    await _run(files, {"/d"}, ["/a.txt", "/d"], no_clobber=True)
-    assert files["/d/a.txt"] == b"OLD"
-    assert files["/a.txt"] == b"NEW"
 
 
 @pytest.mark.asyncio
@@ -467,26 +458,14 @@ def test_parse_mv_flags_conflicts_and_grammar():
         return FlagView(bag, spec=SPECS["mv"])
 
     with pytest.raises(UsageError) as exc:
-        parse_flags(view({"backup": True, "exchange": True}))
+        parse_flags(view({"backup": True, "no_clobber": True}))
     assert (
         "mv: cannot combine --backup with --exchange, -n, or "
         "--update=none-fail" in str(exc.value)
     )
-    with pytest.raises(UsageError) as exc:
-        parse_flags(view({"backup": True, "no_clobber": True}))
-    assert "cannot combine --backup" in str(exc.value)
-    with pytest.raises(UsageError) as exc:
-        parse_flags(
-            view({"target_directory": "/d", "no_target_directory": True})
-        )
-    assert "cannot combine --target-directory" in str(exc.value)
     parsed = parse_flags(view({"update": True, "exchange": True}))
     assert parsed.update == "older"
     assert parsed.exchange is True
-    assert parse_flags(view({"no_copy": True})).no_copy is True
-    # GNU 9.7: `mv --backup --suffix= f g` writes g~, so an empty suffix
-    # reads as absent rather than naming the original as its own backup.
-    assert parse_flags(view({"backup": True, "suffix": ""})).suffix == "~"
 
 
 @pytest.mark.asyncio

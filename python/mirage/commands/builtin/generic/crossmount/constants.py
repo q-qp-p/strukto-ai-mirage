@@ -42,13 +42,13 @@ FANOUT_COMMANDS = frozenset(
         Cmd.UNLINK,
         Cmd.TOUCH,
         Cmd.MKDIR,
-        Cmd.TEE,
     }
 )
 RELAY_COMMANDS = frozenset(
     {
         Cmd.CP,
         Cmd.MV,
+        Cmd.TEE,
         Cmd.DIFF,
         Cmd.CMP,
         Cmd.PASTE,

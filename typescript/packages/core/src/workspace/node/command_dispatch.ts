@@ -829,13 +829,13 @@ async function routeArgv(
   // Metadata commands (namespace-routed: resolve-then-setattr with
   // overlay fallback; they run their own link follow).
   if (name === 'chmod') {
-    return handleChmod(namespace, dispatch, operands)
+    return handleChmod(namespace, dispatch, session, operands)
   }
   if (name === 'chown') {
-    return handleChown(namespace, dispatch, operands)
+    return handleChown(namespace, dispatch, session, operands)
   }
   if (name === 'chgrp') {
-    return handleChgrp(namespace, dispatch, operands)
+    return handleChgrp(namespace, dispatch, session, operands)
   }
   if (name === 'touch') {
     return handleTouch(namespace, dispatch, session, operands)

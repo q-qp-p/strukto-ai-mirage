@@ -366,7 +366,7 @@ def test_a_program_that_is_not_getopt_long_keeps_its_unknown_wording():
     """curl, python, jq and find answer this as an unknown option.
 
     Each measured: `curl --silent=2` is `option --silent=2: is unknown`,
-    `python3 --version=2` is `unknown option --version=2`, and
+    `python3 --version=2` is `Unknown option: --version=2`, and
     `jq --tab=2` is jq's own unknown-option line. Routing them through
     the getopt_long wording would put GNU's words in a program that does
     not use GNU's parser.
@@ -377,7 +377,7 @@ def test_a_program_that_is_not_getopt_long_keeps_its_unknown_wording():
     msg, _ = unexpected_value_error("jq", "--tab=2")
     assert msg.startswith(b"jq: unrecognized option '--tab=2'\n")
     msg, _ = unexpected_value_error("python3", "--version=2")
-    assert msg.startswith(b"unknown option --version=2\n")
+    assert msg.startswith(b"Unknown option: --version=2\n")
     msg, _ = unexpected_value_error("find", "--help=2")
     assert msg == b"find: unknown predicate `--help=2'\n"
 

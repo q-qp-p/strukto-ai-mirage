@@ -18,7 +18,7 @@ import type { ExecuteResult } from '@struktoai/mirage-core/workspace/workspace/w
 
 export function decode(value: Uint8Array | null | undefined): string {
   if (value === null || value === undefined) return ''
-  return new TextDecoder('utf-8').decode(value)
+  return new TextDecoder('utf-8', { ignoreBOM: true }).decode(value)
 }
 
 /**

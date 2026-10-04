@@ -85,7 +85,7 @@ export async function handleCrossMount(
     if (strategy === Strategy.STREAM) {
       return await runStream(cmd, scopes, textArgs, flagKwargs, runSingle)
     }
-    return await runFanout(cmd, scopes, textArgs, flagKwargs, runSingle, stdin)
+    return await runFanout(cmd, scopes, textArgs, flagKwargs, runSingle)
   } catch (err) {
     // The command's own usage refusal (cmp's bad skip, an extra operand) is
     // its result, and the rest of the line runs, as the single-mount path

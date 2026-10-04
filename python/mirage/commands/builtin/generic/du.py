@@ -868,7 +868,7 @@ async def du_generic(
         directories=directories,
         links=(
             None
-            if fl.as_bool("L")
+            if fl.typed_order("L", "P")[-1:] == ["L"]
             else opts.ns.links
             if opts.ns is not None
             else None

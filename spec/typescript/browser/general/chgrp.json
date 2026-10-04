@@ -8,19 +8,36 @@
   },
   "options": [
     {
-      "short": "-R",
+      "long": "--changes",
+      "short": "-c",
       "type": "bool"
     },
     {
-      "short": "-v",
-      "type": "bool"
-    },
-    {
+      "long": "--silent",
       "short": "-f",
       "type": "bool"
     },
     {
+      "long": "--quiet",
+      "type": "bool"
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "type": "bool"
+    },
+    {
+      "long": "--dereference",
+      "type": "bool"
+    },
+    {
+      "long": "--no-dereference",
       "short": "-h",
+      "type": "bool"
+    },
+    {
+      "long": "--recursive",
+      "short": "-R",
       "type": "bool"
     }
   ],

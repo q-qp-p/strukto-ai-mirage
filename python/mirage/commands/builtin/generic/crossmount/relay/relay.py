@@ -26,6 +26,7 @@ from mirage.commands.builtin.generic.crossmount.relay.paste import run_paste
 from mirage.commands.builtin.generic.crossmount.relay.sed import run_sed
 from mirage.commands.builtin.generic.crossmount.relay.sort import run_sort
 from mirage.commands.builtin.generic.crossmount.relay.tar import run_tar
+from mirage.commands.builtin.generic.crossmount.relay.tee import run_tee
 from mirage.commands.builtin.generic.crossmount.relay.unzip import run_unzip
 from mirage.commands.builtin.generic.crossmount.relay.wc import run_wc
 from mirage.commands.builtin.generic.crossmount.relay.zip_cmd import run_zip
@@ -84,7 +85,7 @@ async def run_relay(
 
     Args:
         cmd_name (str): One of cp, mv, diff, cmp, paste, comm, join, tar,
-            unzip, zip, ls, sort, wc, awk, sed, realpath.
+            tee, unzip, zip, ls, sort, wc, awk, sed, realpath.
         scopes (list[PathSpec]): Path operands in command-line order.
         text_args (list[str]): Positional text operands (tar's member
             selectors, cmp's skips; empty for the transfer and merge
@@ -121,10 +122,12 @@ async def run_relay(
         return await run_ls(scopes, flag_kwargs, dispatch, ns, session_view)
     if cmd_name == Cmd.CP:
         return await run_cp(
-            scopes, flag_kwargs, dispatch, storage_key, ns, cwd
+            scopes, flag_kwargs, dispatch, storage_key, ns, cwd, stdin
         )
     if cmd_name == Cmd.MV:
-        return await run_mv(scopes, flag_kwargs, dispatch, storage_key, ns)
+        return await run_mv(
+            scopes, flag_kwargs, dispatch, storage_key, ns, stdin
+        )
     if cmd_name == Cmd.DIFF:
         return await run_diff(scopes, flag_kwargs, dispatch, stdin)
     if cmd_name == Cmd.PASTE:
@@ -137,6 +140,8 @@ async def run_relay(
         return await run_tar(
             scopes, text_args, flag_kwargs, dispatch, ns, stdin
         )
+    if cmd_name == Cmd.TEE:
+        return await run_tee(scopes, flag_kwargs, dispatch, stdin)
     if cmd_name == Cmd.UNZIP:
         return await run_unzip(scopes, text_args, flag_kwargs, dispatch)
     if cmd_name == Cmd.ZIP:

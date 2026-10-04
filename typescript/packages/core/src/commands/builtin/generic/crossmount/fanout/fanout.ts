@@ -12,7 +12,7 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
-import { materialize, type ByteSource } from '../../../../../io/types.ts'
+import type { ByteSource } from '../../../../../io/types.ts'
 import type { PathSpec } from '../../../../../types.ts'
 import { combinedExit } from './exit.ts'
 import { duTotal } from './du.ts'
@@ -55,14 +55,9 @@ export async function runFanout(
   textArgs: string[],
   flagKwargs: Record<string, FlagValue>,
   runSingle: RunSingle,
-  stdin: ByteSource | null = null,
 ): Promise<CrossResult> {
   let flags = { ...flagKwargs }
   flagOccurrences(flags).push(...flagOccurrences(flagKwargs))
-  let stdinBytes: Uint8Array | null = null
-  if (cmdName === Cmd.TEE) {
-    stdinBytes = stdin !== null ? await materialize(stdin) : new Uint8Array()
-  }
   if (cmdName === Cmd.GREP && !new FlagView(flags, specOf(Cmd.GREP)).asBool('h')) {
     flags.H = true
   }
@@ -86,15 +81,7 @@ export async function runFanout(
   const quiet =
     (cmdName === Cmd.GREP && new FlagView(flags, specOf(Cmd.GREP)).asBool('q')) ||
     (cmdName === Cmd.RG && new FlagView(flags, specOf(Cmd.RG)).asBool('quiet'))
-  const results = await runOperands(
-    runSingle,
-    cmdName,
-    scopes,
-    [...textArgs],
-    flags,
-    stdinBytes,
-    quiet,
-  )
+  const results = await runOperands(runSingle, cmdName, scopes, [...textArgs], flags, quiet)
   const errored = results.map((r) => r.io.exitCode !== 0 && r.io.stderr !== null)
   const exitCode = combinedExit(
     cmdName,
@@ -107,8 +94,6 @@ export async function runFanout(
   let body: ByteSource | null
   if (duC) {
     body = duTotal(results, duHuman)
-  } else if (cmdName === Cmd.TEE) {
-    body = stdinBytes ?? new Uint8Array()
   } else if (
     (cmdName === Cmd.HEAD || cmdName === Cmd.TAIL) &&
     new FlagView(flags, specOf(cmdName)).asBool(verboseKey)

@@ -27,6 +27,7 @@ import type {
   ExecContext,
   RegisteredCommand,
 } from '../../commands/config.ts'
+import { STDIN_DASH_COMMANDS, STDIN_DASH_LEADING } from '../../commands/spec/constants.ts'
 import { hasInjectedVersion } from '../../commands/spec/standard.ts'
 import { ROOT_CWD } from '../../commands/constants.ts'
 import type { OpKwargs } from '../../ops/registry.ts'
@@ -595,7 +596,22 @@ export class MountEntry {
           dotted: p.dotted,
           walkError: p.walkError,
         })
-      const prefixedPaths = paths.map(stamp)
+      // A stdin `-` routed nowhere, so it rides on whichever mount runs the
+      // line, beside the operands that chose it.
+      const stdinSlots = STDIN_DASH_COMMANDS.has(cmdName)
+        ? (STDIN_DASH_LEADING.get(cmdName) ?? paths.length)
+        : 0
+      const prefixedPaths = paths.map((p, index) =>
+        index < stdinSlots && p.rawPath === '-'
+          ? new PathSpec({
+              virtual: `${mountPrefix}/-`,
+              directory: p.directory,
+              resolved: p.resolved,
+              vfsPath: '-',
+              rawPath: p.rawPath,
+            })
+          : stamp(p),
+      )
       // Stamp this mount's backend key onto path-shaped flag values so
       // backend reads can address them: a single PathSpec (awk -f, tar -f)
       // or a list (repeated grep -f, jq's --rawfile pairs). Everything else

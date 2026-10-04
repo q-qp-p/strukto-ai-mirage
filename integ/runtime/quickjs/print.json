@@ -63,6 +63,25 @@
           }
         }
       ]
+    },
+    {
+      "id": "printf_more_conversions",
+      "world": {
+        "runtimes": [
+          "quickjs",
+          "workspace"
+        ]
+      },
+      "steps": [
+        {
+          "command": "js -e \"std.out.printf('E[%E]G[%G]o[%#o]neg[%05d]s[%.3s]c[%c]', 1234.5678, 0.00012, 8, -42, 'abcdef', 'zz')\"",
+          "expect": {
+            "exit": 0,
+            "stdout": "E[1.234568E+03]G[0.00012]o[010]neg[-0042]s[abc]c[z]",
+            "stderr": ""
+          }
+        }
+      ]
     }
   ]
 }

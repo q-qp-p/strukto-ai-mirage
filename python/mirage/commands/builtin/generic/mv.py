@@ -28,10 +28,12 @@ from mirage.commands.builtin.generic.cp import (
     make_backup,
     overwrite_gate,
     overwrite_type_error,
+    prompter,
     rename_link,
     slash_refuses_file,
     source_kind,
     split_operands,
+    stderr_of,
     suffix_flag,
     target_dir_error,
     target_flags,
@@ -70,6 +72,7 @@ _HOLDING_ATTEMPTS = 100
 @dataclass(frozen=True, slots=True)
 class MvFlags:
     no_clobber: bool = False
+    interactive: bool = False
     verbose: bool = False
     update: str | None = None
     backup: str | None = None
@@ -85,10 +88,10 @@ class MvFlags:
 def parse_flags(fl: FlagView) -> MvFlags:
     """Parse the mv flag bag once into a frozen struct.
 
-    ``-f``/``-i`` are accepted no-ops (non-interactive control plane:
-    overwrite always proceeds unless ``-n``/``--update`` say otherwise),
-    and ``--strip-trailing-slashes`` is a no-op because PathSpec already
-    normalizes trailing slashes.
+    The last of ``-f``, ``-i`` and ``-n`` decides: ``-i`` asks before
+    each overwrite, ``-n`` skips, ``-f`` replaces. ``--strip-trailing-
+    slashes`` is a no-op because PathSpec already normalizes trailing
+    slashes.
 
     Args:
         fl (FlagView): Flag view constructed with the mv spec.
@@ -96,7 +99,8 @@ def parse_flags(fl: FlagView) -> MvFlags:
     update = update_mode("mv", fl)
     suffix = suffix_flag(fl)
     control = backup_control("mv", backup_raw(fl), suffix)
-    no_clobber = fl.as_bool("no_clobber")
+    answer = fl.typed_order("force", "interactive", "no_clobber")
+    no_clobber = bool(answer) and answer[-1] == "no_clobber"
     exchange = fl.as_bool("exchange")
     if (
         control is not None
@@ -111,6 +115,7 @@ def parse_flags(fl: FlagView) -> MvFlags:
     target_dir, no_target = target_flags("mv", fl)
     return MvFlags(
         no_clobber=no_clobber,
+        interactive=bool(answer) and answer[-1] == "interactive",
         verbose=fl.as_bool("verbose"),
         update=update,
         backup=control,
@@ -344,6 +349,7 @@ async def mv(
     readdir: ReaddirFn | None = None,
     guard: Callable[[PathSpec, PathSpec], None] | None = None,
     copies: TransferLinks | None = None,
+    stdin: ByteSource | None = None,
 ) -> tuple[ByteSource | None, IOResult]:
     """Move sources to a destination, fanning out into a directory.
 
@@ -377,6 +383,7 @@ async def mv(
             a refused move mutates nothing (no half-copy, no destination
             renamed aside by ``-b``). Consulted only for a directory
             source, since a file carries nothing below it to reveal.
+        stdin (ByteSource | None): where ``-i`` reads its answers.
 
     Returns:
         tuple[ByteSource | None, IOResult]: Verbose output and recorded
@@ -409,17 +416,23 @@ async def mv(
         dst_exists, dst_is_dir, dst_err = await dest_kind(stat, dst)
     if readdir is None and isinstance(strategy, PrimitiveMove):
         readdir = strategy.readdir
+    errors: list[str] = []
+    accepted: list[str] = []
     policy = TransferPolicy(
         cmd_name="mv",
         no_clobber=flags.no_clobber,
         update=flags.update,
         backup=flags.backup,
         suffix=flags.suffix,
+        ask=(
+            prompter("mv", stdin, errors, accepted)
+            if flags.interactive
+            else None
+        ),
     )
     renames: list[tuple[str, str]] = []
     writes: dict[str, ByteSource] = {}
     lines: list[str] = []
-    errors: list[str] = []
     created: set[str] = set()
     for src, target in copy_targets(
         sources, dst, dst_is_dir, dst_exists, dst_err
@@ -508,6 +521,10 @@ async def mv(
                 or flags.backup == "numbered"
             )
         ):
+            # -i asks first: GNU only meets the just-created rule once
+            # the answer says to replace.
+            if policy.ask is not None and not await policy.ask(target):
+                continue
             errors.append(
                 f"mv: will not overwrite just-created '{target.raw_path}' "
                 f"with '{src.raw_path}'"
@@ -645,10 +662,9 @@ async def mv(
                 line += f" (backup: '{backup.raw_path}')"
             lines.append(line)
     output = "\n".join(lines) + "\n" if lines else None
-    stderr = ("\n".join(errors) + "\n").encode() if errors else None
     return output.encode() if output else None, IOResult(
         writes=writes,
         renames=renames,
-        stderr=stderr,
-        exit_code=1 if errors else 0,
+        stderr=stderr_of(errors),
+        exit_code=1 if len(errors) > len(accepted) else 0,
     )

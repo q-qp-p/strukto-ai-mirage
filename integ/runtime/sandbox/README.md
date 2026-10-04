@@ -15,5 +15,6 @@ the exit code. What the line touches lives on the box, not on a mount.
 
 The boxes are docker, ssh, e2b, smolvm and apple_container. CI runs docker
 and ssh in `integ-runtime` against containers it starts, and e2b in
-`integ-e2b` against E2B Embed; smolvm and apple_container run where their
+`integ-e2b` against E2B Embed, on the python host only (see the runtime
+README); smolvm and apple_container run where their
 host exists.

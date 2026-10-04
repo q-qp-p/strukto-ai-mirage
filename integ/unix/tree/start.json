@@ -101,6 +101,40 @@
     "stdout": "/data/nope  [error opening dir]\n\n0 directories, 0 files\n",
     "stderr": ""
    }
-  }
- ]
+  },
+    {
+      "id": "tree_start_under_a_file_is_missing",
+      "seq": 15300403,
+      "targets": [
+        "ram",
+        "disk",
+        "redis",
+        "opfs",
+        "s3",
+        "gridfs",
+        "s3-prefix",
+        "gridfs-prefix",
+        "hf",
+        "hf-prefix",
+        "dropbox",
+        "dropbox-root",
+        "onedrive",
+        "sharepoint",
+        "ssh",
+        "nextcloud",
+        "gdrive",
+        "gdrive-folder",
+        "box",
+        "databricks",
+        "databricks-prefix",
+        "sharepoint-prefix"
+      ],
+      "command": "tree /data/a.txt/x; echo rc=$?",
+      "expect": {
+        "exit": 0,
+        "stdout": "/data/a.txt/x  [error opening dir]\n\n0 directories, 0 files\nrc=2\n",
+        "stderr": ""
+      }
+    }
+  ]
 }

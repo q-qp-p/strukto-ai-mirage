@@ -29,7 +29,13 @@ from mirage.types import (
     ReadBytesFn,
     StatFn,
 )
-from mirage.utils.errors import FS_ERRORS, DotWalkError, eisdir, fs_error_line
+from mirage.utils.errors import (
+    FS_ERRORS,
+    READ_FAILURES,
+    DotWalkError,
+    eisdir,
+    fs_error_line,
+)
 
 
 def mount_points(mounts: MountView | None, directory: str) -> list[str]:
@@ -217,6 +223,51 @@ async def split_readable(
     """
     readable, err, _ = await split_readable_coded(paths, stat, cmd_name)
     return readable, err
+
+
+async def split_opened(
+    paths: list[PathSpec],
+    stat: StatFn,
+    cmd_name: str,
+) -> tuple[list[PathSpec], frozenset[str], bytes]:
+    """``split_readable`` for the commands that head each operand.
+
+    GNU head and tail open an operand before they read it, and a
+    directory opens: its ``==> name <==`` header prints and only the
+    read after it fails. So a directory keeps its place among the
+    opened operands, named in the unread set, while one that does not
+    open at all (a missing name) is dropped as ``split_readable`` drops
+    it.
+
+    Args:
+        paths (list[PathSpec]): Glob-resolved operands in command order.
+        stat (StatFn): Bound stat called as ``stat(path)``.
+        cmd_name (str): Command name for the stderr prefix.
+
+    Returns:
+        tuple[list[PathSpec], frozenset[str], bytes]: the operands that
+        open, in order; the virtual paths among them whose read fails;
+        and the stderr lines.
+    """
+    opened: list[PathSpec] = []
+    unread: set[str] = set()
+    err = b""
+    for p in paths:
+        failure: BaseException | None = None
+        try:
+            st = await stat(p)
+        except FS_ERRORS as exc:
+            failure = exc
+        else:
+            if getattr(st, "type", None) == FileType.DIRECTORY:
+                failure = eisdir(p)
+        if failure is not None:
+            err += fs_error_line(cmd_name, p, failure).encode()
+            if not isinstance(failure, READ_FAILURES):
+                continue
+            unread.add(p.virtual)
+        opened.append(p)
+    return opened, frozenset(unread), err
 
 
 @dataclass(frozen=True, slots=True)

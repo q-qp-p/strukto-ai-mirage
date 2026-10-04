@@ -28,6 +28,7 @@ from mirage.commands.builtin.generic_bind.adapter import refuse_reveal
 from mirage.commands.spec import SPECS
 from mirage.commands.spec.flag_view import FlagView
 from mirage.commands.spec.types import FlagValue
+from mirage.io.types import ByteSource
 from mirage.ops.types import NamespaceView
 from mirage.runtime.types import DispatchFn
 from mirage.types import PathSpec, PrimitiveMove
@@ -39,6 +40,7 @@ async def run_mv(
     dispatch: DispatchFn,
     storage_key: Callable[[PathSpec], str] | None = None,
     ns: NamespaceView | None = None,
+    stdin: ByteSource | None = None,
 ) -> CrossResult:
     """Move operands that span mounts via the shared generic mv.
 
@@ -54,6 +56,7 @@ async def run_mv(
             store would copy the object onto itself and then unlink the
             source, destroying it.
         ns (NamespaceView | None): Namespace facts for link operands.
+        stdin (ByteSource | None): where ``-i`` reads its answers.
     """
     p = functools.partial
     fl = FlagView(flag_kwargs, spec=SPECS["mv"])
@@ -77,4 +80,5 @@ async def run_mv(
             if ns is not None and ns.links is not None
             else None
         ),
+        stdin=stdin,
     )

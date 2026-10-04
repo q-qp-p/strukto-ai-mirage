@@ -53,6 +53,36 @@
       "hosts": [
         "typescript"
       ]
+    },
+    {
+      "id": "system_exit_sets_the_status",
+      "hosts": [
+        "typescript"
+      ],
+      "world": {
+        "runtimes": [
+          "pyodide",
+          "workspace"
+        ]
+      },
+      "steps": [
+        {
+          "command": "python3 -c 'import sys; sys.exit()'",
+          "expect": {
+            "exit": 0,
+            "stdout": "",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 -c 'import sys; sys.exit(\"boom\")'",
+          "expect": {
+            "exit": 1,
+            "stdout": "",
+            "stderr": "boom\n"
+          }
+        }
+      ]
     }
   ]
 }

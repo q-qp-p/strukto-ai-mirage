@@ -14,7 +14,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest'
 import { MountMode, RAMVFS, Workspace } from '@struktoai/mirage-node'
-import { FileVersionTracker, StaleMirageFileError } from './file_version.ts'
+import { FileVersionTracker, StaleMirageFileError, fingerprint } from './file_version.ts'
 
 let ws: Workspace
 
@@ -43,7 +43,101 @@ function renderingWs(inner: Workspace): Workspace {
   } as unknown as Workspace
 }
 
+// A read seam that holds the reads at the given call indices once they
+// fetched their bytes, until the test releases them, so a write can land
+// while a read is in flight.
+function heldWs(
+  inner: Workspace,
+  holdAt: readonly number[],
+): {
+  ws: Workspace
+  fetched: Map<number, Promise<void>>
+  release: Map<number, () => void>
+} {
+  const fetched = new Map<number, Promise<void>>()
+  const reached = new Map<number, () => void>()
+  const release = new Map<number, () => void>()
+  const held = new Map<number, Promise<void>>()
+  for (const n of holdAt) {
+    fetched.set(
+      n,
+      new Promise<void>((resolve) => {
+        reached.set(n, resolve)
+      }),
+    )
+    held.set(
+      n,
+      new Promise<void>((resolve) => {
+        release.set(n, resolve)
+      }),
+    )
+  }
+  let reads = 0
+  const ws = {
+    vfs: {
+      read: async (path: string, options?: { raw?: boolean }): Promise<Uint8Array> => {
+        const n = reads++
+        const bytes = await inner.vfs.read(path, options)
+        const hold = held.get(n)
+        if (hold !== undefined) {
+          reached.get(n)?.()
+          await hold
+        }
+        return bytes
+      },
+      write: (path: string, content: string): Promise<void> => inner.vfs.write(path, content),
+      exists: (path: string): Promise<boolean> => inner.vfs.exists(path),
+    },
+    namespace: inner.namespace,
+  } as unknown as Workspace
+  return { ws, fetched, release }
+}
+
+describe('fingerprint', () => {
+  it('is the unpadded base64url sha256 the Python tracker stamps', async () => {
+    const stamp = await fingerprint(new TextEncoder().encode('hello'))
+    expect(stamp).toBe('LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ')
+  })
+})
+
 describe('FileVersionTracker', () => {
+  it('shows and stamps a write that lands while a read of the old bytes is in flight', async () => {
+    await ws.vfs.write('/a.txt', 'one')
+    const held = heldWs(ws, [0])
+    const tracker = new FileVersionTracker(held.ws)
+    const reading = tracker.read('/a.txt')
+    await held.fetched.get(0)
+    await tracker.write('/a.txt', 'two')
+    held.release.get(0)?.()
+    expect(new TextDecoder().decode(await reading)).toBe('two')
+    await tracker.write('/a.txt', 'three')
+    expect(await ws.vfs.cat('/a.txt')).toBe('three')
+  })
+
+  it('keeps the shown stamp when writes land during both fetches of a read', async () => {
+    await ws.vfs.write('/a.txt', 'one')
+    const held = heldWs(ws, [0, 2])
+    const tracker = new FileVersionTracker(held.ws)
+    const reading = tracker.read('/a.txt')
+    await held.fetched.get(0)
+    await tracker.write('/a.txt', 'two')
+    held.release.get(0)?.()
+    await held.fetched.get(2)
+    await tracker.write('/a.txt', 'three')
+    held.release.get(2)?.()
+    expect(new TextDecoder().decode(await reading)).toBe('two')
+    await expect(tracker.write('/a.txt', 'four')).rejects.toThrow(StaleMirageFileError)
+    expect(await ws.vfs.cat('/a.txt')).toBe('three')
+  })
+
+  it('hands back bytes the caller can change without changing the file', async () => {
+    const tracker = new FileVersionTracker(ws)
+    await ws.vfs.write('/a.txt', 'one')
+    const bytes = await tracker.read('/a.txt')
+    bytes[0] = 0x4f
+    expect(await ws.vfs.cat('/a.txt')).toBe('one')
+  })
+
   it('refuses a write to a file that changed underneath', async () => {
     const tracker = new FileVersionTracker(ws)
     await ws.vfs.write('/a.txt', 'one')

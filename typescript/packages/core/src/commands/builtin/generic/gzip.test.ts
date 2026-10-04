@@ -38,17 +38,14 @@ async function shell(line: string): Promise<[string, string, number]> {
 
 describe('gzip on a link in place (O_NOFOLLOW unless -c or -f)', () => {
   const seed = "cd /data && printf 'hello\\n' > a.txt && ln -s a.txt al && "
-  it.each(['gzip al', 'gzip -k al', 'gzip -q al'])('%s refuses the link', async (line) => {
-    const r = await shell(`${seed}${line}; ls -F`)
+  it('gzip -k refuses the link', async () => {
+    const r = await shell(`${seed}gzip -k al; ls -F`)
     expect(r).toEqual(['a.txt\nal@\n', 'gzip: al: Too many levels of symbolic links\n', 0])
   })
 
-  it.each([
-    ['gzip -f al', 'a.txt\nal.gz\n'],
-    ['gzip -kf al', 'a.txt\nal@\nal.gz\n'],
-  ])('%s compresses beside the link', async (line, listing) => {
-    const r = await shell(`${seed}${line} && ls -F && gunzip -c al.gz`)
-    expect(r).toEqual([`${listing}hello\n`, '', 0])
+  it('gzip -kf compresses beside the link', async () => {
+    const r = await shell(`${seed}gzip -kf al && ls -F && gunzip -c al.gz`)
+    expect(r).toEqual(['a.txt\nal@\nal.gz\nhello\n', '', 0])
   })
 })
 

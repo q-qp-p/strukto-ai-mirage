@@ -50,13 +50,12 @@ function suffixError(value: string, junk: string): UsageError {
   )
 }
 
-// GNU's --from=iec-i complaint that the `i` is absent, exit 2. The `i` test
-// sits OUTSIDE the suffix branch in GNU's simple_strtod_human, so it
-// answers for every field whose unit letter is not followed by an `i` -- a
-// field with no unit at all included. Measured on coreutils 9.4: `1`,
-// `1.5`, `1K`, `1Kx`, `1KB` and `1KII` all get this clause, while `1Kii`
-// and `1KiB` consume the `i` and report their leftover as an invalid suffix
-// instead, and `1i` never reaches it because `i` is not a unit letter.
+// GNU's --from=iec-i complaint that the `i` is absent, exit 2. It answers
+// for every field whose unit letter is not followed by an `i`: `1K`, `1Kx`,
+// `1KB` and `1KII` all get this clause, while `1Kii` and `1KiB` consume the
+// `i` and report their leftover as an invalid suffix instead, `1i` never
+// reaches it because `i` is not a unit letter, and a field with no unit at
+// all is read as it stands (coreutils 9.7; 9.4 refused that one too).
 function missingISuffixError(value: string): UsageError {
   return new UsageError(
     `numfmt: missing 'i' suffix in input: '${quoteText(value)}' (e.g Ki/Mi/Gi)`,
@@ -109,10 +108,7 @@ function parseNumber(value: string, fromMode: string): Parsed {
   const dot = head.indexOf('.')
   const fraction = dot < 0 ? '' : head.slice(dot + 1)
   const digits = BigInt(dot < 0 ? head : head.slice(0, dot) + fraction)
-  if (rest === '') {
-    if (fromMode === 'iec-i') throw missingISuffixError(value)
-    return { digits, scale: fraction.length, decimals: fraction.length }
-  }
+  if (rest === '') return { digits, scale: fraction.length, decimals: fraction.length }
   if (UNIT_EXPONENTS[rest[0] ?? ''] === undefined) throw suffixError(value, '')
   if (fromMode === 'none') {
     throw new UsageError(

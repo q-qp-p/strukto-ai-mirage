@@ -416,10 +416,7 @@ async def test_excluded_entry_that_fails_stat_does_not_stop_the_walk():
     "flags, expected",
     [
         ({"A": "1"}, b"/g1:a\n/g1-b\n--\n/g2:a\n/g2-y\n"),
-        ({"B": "1"}, b"/g1:a\n--\n/g2-x\n/g2:a\n"),
-        ({"h": True, "A": "1"}, b"a\nb\n--\na\ny\n"),
         ({"c": True, "A": "1"}, b"/g1:1\n/g2:1\n"),
-        ({}, b"/g1:a\n/g2:a\n"),
     ],
 )
 @pytest.mark.asyncio

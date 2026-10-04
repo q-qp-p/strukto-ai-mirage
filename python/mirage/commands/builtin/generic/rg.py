@@ -387,6 +387,9 @@ def parse_flags(fl: FlagView) -> RgFlags:
         sort = _choice(fl, sort_flag, f"--{sort_flag}", SORT_KEYS)
     separator = _last(fl, "context_separator", "no_context_separator")
     typed_separator = fl.as_str("context_separator")
+    # An empty field separator is a value: ripgrep runs the fields together.
+    match_separator = fl.as_str("field_match_separator")
+    context_field_separator = fl.as_str("field_context_separator")
     if sort == "created":
         raise UsageError(
             "rg: sorting by creation time is not supported by the virtual "
@@ -404,8 +407,10 @@ def parse_flags(fl: FlagView) -> RgFlags:
     ]
     return RgFlags(
         engine=engine_flag(fl),
-        pcre2_unicode=_last(fl, "pcre2_unicode", "no_pcre2_unicode")
-        != "no_pcre2_unicode",
+        unicode=_last(
+            fl, "unicode", "no_unicode", "pcre2_unicode", "no_pcre2_unicode"
+        )
+        not in ("no_unicode", "no_pcre2_unicode"),
         ignore_case=case == "ignore_case",
         smart_case=case == "smart_case",
         invert=_last(fl, "invert_match", "no_invert_match") == "invert_match",
@@ -458,10 +463,10 @@ def parse_flags(fl: FlagView) -> RgFlags:
             else "--"
         ),
         field_match_separator=unescape(
-            fl.as_str("field_match_separator") or ":"
+            ":" if match_separator is None else match_separator
         ),
         field_context_separator=unescape(
-            fl.as_str("field_context_separator") or "-"
+            "-" if context_field_separator is None else context_field_separator
         ),
         globs=tuple(fl.as_list("glob")),
         iglobs=tuple(fl.as_list("iglob")),
@@ -498,9 +503,11 @@ def rg_syntax(f: RgFlags) -> RegexSyntax:
 
 
 def engine_flag(fl: FlagView) -> str:
-    """The regex engine the line asks for, the last of -P, --no-pcre2
-    and --engine winning (ripgrep 14.1.1: `rg -P --no-pcre2` is the
-    default engine and `rg --no-pcre2 -P` is PCRE2).
+    """The regex engine the line asks for, the last of -P, --no-pcre2,
+    --engine and the deprecated --auto-hybrid-regex pair winning
+    (ripgrep 14.1.1: `rg -P --no-pcre2` is the default engine, `rg
+    --no-pcre2 -P` is PCRE2, and --no-auto-hybrid-regex selects the
+    default engine as --auto-hybrid-regex selects auto).
 
     Args:
         fl (FlagView): the flag view.
@@ -508,9 +515,18 @@ def engine_flag(fl: FlagView) -> str:
     Raises:
         UsageError: --engine names no engine ripgrep has.
     """
-    chosen = _last(fl, "pcre2", "no_pcre2", "engine")
+    chosen = _last(
+        fl,
+        "pcre2",
+        "no_pcre2",
+        "engine",
+        "auto_hybrid_regex",
+        "no_auto_hybrid_regex",
+    )
     if chosen == "pcre2":
         return "pcre2"
+    if chosen == "auto_hybrid_regex":
+        return "auto"
     if chosen != "engine":
         return "default"
     value = fl.as_str("engine") or ""
@@ -536,14 +552,14 @@ def rust_matcher(
         UsageError: regex-syntax refuses the pattern.
     """
     try:
-        translated = translate_rust(patterns, fold, f.null_data)
+        translated = translate_rust(patterns, fold, f.null_data, f.unicode)
     except RustRegexError as exc:
         raise UsageError(f"rg: {exc}") from exc
     source = translated.source
     if f.line_regexp:
         source = whole_line(source, f.null_data)
     elif f.whole_word:
-        source = whole_word(source)
+        source = whole_word(source, f.unicode)
     return re.compile(source, re.IGNORECASE if translated.ignore_case else 0)
 
 
@@ -569,16 +585,14 @@ def pcre_matcher(
     elif f.whole_word:
         display = f"(?<!\\w)(?:{display})(?!\\w)"
     try:
-        translated = translate_pcre(
-            display, f.pcre2_unicode, fold, f.null_data
-        )
+        translated = translate_pcre(display, f.unicode, fold, f.null_data)
     except PcreError as exc:
         raise UsageError(
             f"rg: PCRE2: error compiling pattern at offset "
             f"{exc.offset}: {exc.message}"
         ) from exc
     flags = re.IGNORECASE if translated.ignore_case else 0
-    if not f.pcre2_unicode:
+    if not f.unicode:
         flags |= re.ASCII
     return re.compile(translated.source, flags)
 

@@ -12,6 +12,7 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import type { ByteSource } from '../../../../../io/types.ts'
 import type { PathSpec } from '../../../../../types.ts'
 import { cpGeneric, parseFlags } from '../../cp.ts'
 import type { CrossResult, DispatchFn } from '../types.ts'
@@ -66,6 +67,8 @@ export async function runCp(
   ns?: NamespaceView,
   // The working directory a typed link source resolves against.
   cwd = '/',
+  // Where -i reads its answers.
+  stdin: ByteSource | null = null,
 ): Promise<CrossResult> {
   const flat = flatten(scopes)
   const stat = statOp(dispatch)
@@ -98,5 +101,6 @@ export async function runCp(
     undefined,
     undefined,
     links === undefined ? undefined : { links, dispatch, cwd, relay: strategy, relayStat: stat },
+    stdin,
   )
 }

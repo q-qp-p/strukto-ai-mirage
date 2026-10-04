@@ -51,8 +51,9 @@ requirement_met() {
 # The runtime table run.py and run.ts keep: the guest language of each
 # runtime a case's `runtimes` may name (null for a sandbox, which runs whole
 # lines), the line head a program runs under, per host what the runtime
-# needs (absent: not on that host), the world entry it is built from, and
-# the runtimes an unmet requirement skips even under INTEG_RUNTIME_STRICT.
+# needs (absent: not on that host; e2b is python's only, see the README),
+# the world entry it is built from, and the runtimes an unmet requirement
+# skips even under INTEG_RUNTIME_STRICT.
 RUNTIMES='{
   "language": {"monty": "python", "wasi": "python", "pyodide": "python", "quickjs": "js",
     "local": "python", "sandlock": "python", "docker": null, "ssh": null, "e2b": null,
@@ -67,7 +68,7 @@ RUNTIMES='{
     "typescript": {"monty": [], "pyodide": [], "quickjs": [],
       "local": [], "sandlock": ["env:MIRAGE_INTEG_SANDLOCK"],
       "docker": ["env:MIRAGE_INTEG_DOCKER_CONTAINER"], "ssh": ["env:MIRAGE_INTEG_SSH_HOST"],
-      "e2b": ["env:MIRAGE_INTEG_E2B_SANDBOX"], "smolvm": ["env:MIRAGE_INTEG_SMOLVM_MACHINE"],
+      "smolvm": ["env:MIRAGE_INTEG_SMOLVM_MACHINE"],
       "apple_container": ["env:MIRAGE_INTEG_APPLE_CONTAINER"]}
   },
   "entry": {

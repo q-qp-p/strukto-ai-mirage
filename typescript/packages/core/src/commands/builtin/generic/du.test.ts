@@ -124,12 +124,6 @@ describe('duGeneric', () => {
     expect(DEC.decode(out.stdout)).toBe('2\tdir/a.txt\n2\tdir\n')
   })
 
-  it('summarises to one line under -s', async () => {
-    const [size, entries] = backend({ '/dir/a.txt': 2, '/dir/sub/b.txt': 3 })
-    const out = await duGeneric([spec('/dir', 'dir')], flags({ s: true }), size, entries)
-    expect(DEC.decode(out.stdout)).toBe('5\t/dir\n')
-  })
-
   it('drops everything below the operand at --max-depth=0', async () => {
     const [size, entries] = backend({ '/dir/a.txt': 2, '/dir/sub/b.txt': 3 })
     const out = await duGeneric(

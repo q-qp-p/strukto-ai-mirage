@@ -203,11 +203,8 @@ def unknown_option_error(cmd_name: str, token: str) -> tuple[bytes, int]:
     if cmd_name == "rg":
         return rg_unknown_flag(token)
     if cmd_name in PYTHON_NAMES:
-        # CPython's own two shapes, which do not match each other: the
-        # short form capitalizes and takes a colon, the long form does
-        # neither. Both pinned on 3.12.13.
-        if token.startswith("--"):
-            return python_option_error(cmd_name, f"unknown option {token}\n")
+        # CPython names the whole typed token, long or short (pinned on
+        # 3.14.7; 3.12 still spelled a long one `unknown option`).
         dashed = token if token.startswith("-") else f"-{token}"
         return python_option_error(cmd_name, f"Unknown option: {dashed}\n")
     if token.startswith("--"):
@@ -274,7 +271,7 @@ def trigrams(name: str) -> frozenset[str]:
 # option they will not take by naming the whole typed token as unknown
 # rather than by naming the option. Each one is measured: `curl
 # --silent=2` is `curl: option --silent=2: is unknown`, `python3
-# --version=2` is `unknown option --version=2`, `jq --tab=2` is `jq:
+# --version=2` is `Unknown option: --version=2`, `jq --tab=2` is `jq:
 # Unknown option --tab=2`, and find reads the word as a predicate. Every
 # other command here is a GNU tool whose getopt_long words the refusal
 # the other way, so the set is the exception list and not the rule.

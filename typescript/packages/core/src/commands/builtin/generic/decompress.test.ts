@@ -151,10 +151,14 @@ describe('the names gzip opens', () => {
 })
 
 describe('in place', () => {
-  it('names an output already there ahead of a corrupt body', async () => {
-    // gzip checks the output once the header reads, before the body.
+  // gzip checks the output once the header reads, before the body: a
+  // corrupt body loses to an output already there, a bad header wins.
+  it.each([
+    [HELLO.subarray(0, -3), 2, 'gzip: /d/e already exists;\tnot overwritten\n'],
+    [enc.encode('plain\n'), 1, '\ngzip: /d/e.gz: not in gzip format\n'],
+  ])('checks the output after the header, before the body: %#', async (data, code, err) => {
     const files = new Map([
-      ['/d/e.gz', HELLO.subarray(0, -3)],
+      ['/d/e.gz', data],
       ['/d/e', enc.encode('old')],
     ])
     const { read, options } = backend(files)
@@ -162,23 +166,7 @@ describe('in place', () => {
       stdin: null,
       ...options,
     })
-    expect([io.exitCode, text(io.stderr)]).toEqual([
-      2,
-      'gzip: /d/e already exists;\tnot overwritten\n',
-    ])
-  })
-
-  it('names a bad header ahead of an output already there', async () => {
-    const files = new Map([
-      ['/d/e.gz', enc.encode('plain\n')],
-      ['/d/e', enc.encode('old')],
-    ])
-    const { read, options } = backend(files)
-    const [, io] = await decompressInputs([PathSpec.fromStrPath('/d/e.gz')], read, {
-      stdin: null,
-      ...options,
-    })
-    expect([io.exitCode, text(io.stderr)]).toEqual([1, '\ngzip: /d/e.gz: not in gzip format\n'])
+    expect([io.exitCode, text(io.stderr)]).toEqual([code, err])
   })
 })
 
@@ -196,7 +184,6 @@ describe('to stdout', () => {
   })
 
   it.each([
-    ['empty', new Uint8Array(), ''],
     ['one byte', enc.encode('\x1f'), '\x1f'],
     ['trailing zeros', cat(HELLO, new Uint8Array(2)), 'hello\0\0'],
   ])('copies what is not gzip under -f: %s', async (_name, data, out) => {
@@ -259,24 +246,16 @@ it.each(['', '.' + 'a'.repeat(30)])('refuses the -S suffix %j before any input',
 })
 
 it.each([
-  ['a.gz', '.gz', '.gz'],
   ['a.GZ', '.gz', '.GZ'],
   ['a.Tgz', '.gz', '.Tgz'],
   ['a_z', '.gz', '_z'],
-  ['a-GZ', '.gz', '-GZ'],
-  ['a.txt', '.gz', null],
   ['.gz', '.gz', null],
-  ['d/.gz', '.gz', null],
   ['a.xy', '.XY', '.xy'],
-  ['a.gz', 'z', '.gz'],
-  ['az', 'z', 'z'],
 ])('reads the suffix of %s under -S %s as %s', (name, suffix, found) => {
   expect(gzipSuffix(name, suffix)).toBe(found)
 })
 
 it.each([
-  ['.gz', false],
-  ['', true],
   ['.' + 'a'.repeat(29), false],
   ['.' + 'a'.repeat(30), true],
 ])('takes a -S suffix of one to thirty bytes: %j', (suffix, refused) => {

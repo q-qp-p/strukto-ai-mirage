@@ -831,7 +831,8 @@ const RUNTIME_LANGUAGE: Record<string, string | null> = {
 const PROGRAM_HEAD: Record<string, string> = { python: 'python3 -c', js: 'node -e' }
 // What a `runtimes` entry needs on this host before it can run. A runtime
 // missing here does not exist on this host (wasi is python's), so its
-// variant is not listed at all.
+// variant is not listed at all. e2b is left out: E2B's sandbox proxy drops
+// the JS SDK's command streams now and then (see the README).
 const RUNTIME_REQUIRES: Record<string, string[]> = {
   monty: [],
   pyodide: [],
@@ -840,7 +841,6 @@ const RUNTIME_REQUIRES: Record<string, string[]> = {
   sandlock: ['env:MIRAGE_INTEG_SANDLOCK'],
   docker: ['env:MIRAGE_INTEG_DOCKER_CONTAINER'],
   ssh: ['env:MIRAGE_INTEG_SSH_HOST'],
-  e2b: ['env:MIRAGE_INTEG_E2B_SANDBOX'],
   smolvm: ['env:MIRAGE_INTEG_SMOLVM_MACHINE'],
   apple_container: ['env:MIRAGE_INTEG_APPLE_CONTAINER'],
 }

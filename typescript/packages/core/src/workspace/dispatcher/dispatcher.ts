@@ -55,6 +55,8 @@ import { ebusy, isMissingPath } from '../../utils/errors.ts'
 import type { BaseVFS } from '../../vfs/base.ts'
 import {
   type CacheFacts,
+  type CapacityResult,
+  CapacityState,
   DEFAULT_READ_TTL,
   FileStat,
   FileType,
@@ -379,6 +381,7 @@ export class Dispatcher {
     if (XATTR_OPS.has(opName)) {
       return [await this.xattrOp(opName, p, kwargs ?? {}, report, issuer), new IOResult()]
     }
+    if (opName === 'statfs') return [await this.statfs(p, issuer), new IOResult()]
     const resolvedOwner = this.namespace.tryMountFor(p.virtual)
     const opWrite = POLICY_WRITE_OPS.has(opName)
     if (resolvedOwner !== null) {
@@ -1304,6 +1307,32 @@ export class Dispatcher {
     report?.served(null, null)
     const bound = await postOpsGate(this.policies, opName, path, write, owner, result)
     return bound !== null ? await applyOpLimit(result, bound) : result
+  }
+
+  /**
+   * Answer statfs(2) for a path: the type name and the capacity of the
+   * mount that holds it, which is what df reports for that mount. The path
+   * must exist, as statfs's own walk requires. The namespace above every
+   * mount has no file system behind it, so its type is `-` and its
+   * capacity unknown. Mirrors Python's Dispatcher._statfs.
+   *
+   * Args:
+   *   path: the path, already followed.
+   *   issuer: the mark on the op being served.
+   */
+  private async statfs(path: PathSpec, issuer?: symbol): Promise<[string, CapacityResult]> {
+    const mount = this.namespace.tryMountFor(path.virtual)
+    const owner = mount?.prefix ?? ''
+    await preOpsGate(this.policies, 'statfs', path, false, owner, sessionId(), issuer)
+    await this.xattrTarget(mount, path)
+    const answer: [string, CapacityResult] =
+      mount === null
+        ? ['-', { state: CapacityState.UNKNOWN }]
+        : [mount.vfs.name, await mount.use(() => mount.vfs.capacity())]
+    // A policy may deny the reply as it may any op's; a capacity is no bytes,
+    // so a bound has nothing to cap.
+    await postOpsGate(this.policies, 'statfs', path, false, owner, answer)
+    return answer
   }
 
   /**

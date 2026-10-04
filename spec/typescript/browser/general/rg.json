@@ -735,11 +735,19 @@
       "type": "bool"
     },
     {
+      "long": "--no-unicode",
+      "type": "bool"
+    },
+    {
       "long": "--pcre2-unicode",
       "type": "bool"
     },
     {
       "long": "--no-pcre2-unicode",
+      "type": "bool"
+    },
+    {
+      "long": "--auto-hybrid-regex",
       "type": "bool"
     },
     {

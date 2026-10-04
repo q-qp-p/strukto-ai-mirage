@@ -40,6 +40,7 @@ export const BUILDER: Builder = {
       opts.ns?.links == null || opts.dispatch == null
         ? undefined
         : transferLinksOf(opts.ns.links, opts.dispatch, opts.cwd),
+      opts.stdin,
     )
   },
 }

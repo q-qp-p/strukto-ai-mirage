@@ -202,11 +202,10 @@ def parse_separator(value: str | None) -> bytes:
     separator and anything longer is a multi-character one, with the
     two-character spelling ``\\0`` carved out as the only way to write a
     NUL on a command line. The length is counted in bytes, so a lone
-    non-ASCII character is multi-character too (pinned against coreutils
-    9.7). Deliberate divergence, matching truncate: GNU's quotearg escapes
-    control characters in the message and mirage quotes the raw value. Not
-    covered: GNU also refuses two ``-t`` flags naming different characters,
-    which needs a list-valued flag the spec does not have.
+    non-ASCII character is multi-character too, and the refused value is
+    escaped like every other word split quotes (pinned against coreutils
+    9.7). Not covered: GNU also refuses two ``-t`` flags naming different
+    characters, which needs a list-valued flag the spec does not have.
 
     Args:
         value (str | None): the raw flag value, or None when unset.
@@ -219,7 +218,9 @@ def parse_separator(value: str | None) -> bytes:
     if not encoded:
         raise UsageError("split: empty record separator", 1)
     if len(encoded) > 1:
-        raise UsageError(f"split: multi-character separator '{value}'", 1)
+        raise UsageError(
+            f"split: multi-character separator '{quote_text(value)}'", 1
+        )
     return encoded
 
 

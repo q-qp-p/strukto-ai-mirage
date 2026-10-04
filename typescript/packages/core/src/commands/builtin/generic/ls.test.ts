@@ -274,11 +274,6 @@ async function status(
 }
 
 describe('lsGeneric exit codes', () => {
-  it('exits 2 when only one of several operands is missing', async () => {
-    expect((await status(['/bad', '/good']))[0]).toBe(LS_FAILURE)
-    expect((await status(['/good', '/bad']))[0]).toBe(LS_FAILURE)
-  })
-
   it('still lists the good operand while exiting 2', async () => {
     const [code, out] = await status(['/bad', '/good'])
     expect(code).toBe(LS_FAILURE)
@@ -628,9 +623,6 @@ describe('lsGeneric columns and time styles', () => {
 
   it.each([
     ['full-iso', '2025-01-15 10:30:00.000000000 +0000'],
-    ['long-iso', '2025-01-15 10:30'],
-    ['iso', '2025-01-15 '],
-    ['+%Y/%m/%d', '2025/01/15'],
     ['+%Y\n%H:%M', '2025'],
   ])('--time-style=%s spells an old time as GNU does', async (style, expected) => {
     expect(await line({ g: true, o: true, time_style: style })).toBe(

@@ -208,17 +208,6 @@ def test_run_fanout_forces_head_headers_and_blank_line_joins():
     assert _run(materialize(out)) == b"==> /a/x <==\n1\n\n==> /b/y <==\n2\n"
 
 
-def test_run_fanout_tee_refeeds_stdin_and_emits_it_once():
-    rs = FakeRunSingle({"/a/x": (b"hi\n", 0), "/b/y": (b"hi\n", 0)})
-    out, _ = _run(
-        run_fanout(
-            "tee", [_scope("/a/x"), _scope("/b/y")], [], {}, rs, stdin=b"hi\n"
-        )
-    )
-    assert _run(materialize(out)) == b"hi\n"
-    assert all(c["stdin"] == b"hi\n" for c in rs.calls)
-
-
 def test_run_fanout_partial_failure_keeps_output_and_stderr():
     rs = FakeRunSingle({"/a/x": (b"", 1), "/b/y": (b"ok\n", 0)})
     out, io = _run(

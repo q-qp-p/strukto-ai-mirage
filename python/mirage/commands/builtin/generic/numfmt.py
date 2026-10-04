@@ -64,14 +64,12 @@ def _suffix_error(value: str, junk: str) -> UsageError:
 def _missing_i_error(value: str) -> UsageError:
     """GNU's ``--from=iec-i`` complaint that the ``i`` is absent, exit 2.
 
-    The ``i`` test sits OUTSIDE the suffix branch in GNU's
-    ``simple_strtod_human``, so it answers for every field whose unit
-    letter is not followed by an ``i`` -- a field with no unit at all
-    included. Measured on coreutils 9.4: ``1``, ``1.5``, ``1K``, ``1Kx``,
-    ``1KB`` and ``1KII`` all get this clause, while ``1Kii`` and ``1KiB``
-    consume the ``i`` and report their leftover as an invalid suffix
-    instead, and ``1i`` never reaches it because ``i`` is not a unit
-    letter.
+    It answers for every field whose unit letter is not followed by an
+    ``i``: ``1K``, ``1Kx``, ``1KB`` and ``1KII`` all get this clause,
+    while ``1Kii`` and ``1KiB`` consume the ``i`` and report their
+    leftover as an invalid suffix instead, ``1i`` never reaches it
+    because ``i`` is not a unit letter, and a field with no unit at all
+    is read as it stands (coreutils 9.7; 9.4 refused that one too).
 
     Args:
         value (str): the whole input field, as typed.
@@ -147,8 +145,6 @@ def _parse_number(value: str, from_mode: str) -> tuple[Decimal, int]:
     number = Decimal(digits)
     _, _, fraction = digits.partition(".")
     if not suffix:
-        if from_mode == "iec-i":
-            raise _missing_i_error(value)
         return number, len(fraction)
     if suffix[0] not in _UNIT_EXPONENTS:
         raise _suffix_error(value, "")

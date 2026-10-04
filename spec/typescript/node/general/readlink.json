@@ -262,19 +262,43 @@
   },
   "options": [
     {
+      "long": "--canonicalize",
       "short": "-f",
       "type": "bool"
     },
     {
+      "long": "--canonicalize-existing",
       "short": "-e",
       "type": "bool"
     },
     {
+      "long": "--canonicalize-missing",
       "short": "-m",
       "type": "bool"
     },
     {
+      "long": "--no-newline",
       "short": "-n",
+      "type": "bool"
+    },
+    {
+      "long": "--quiet",
+      "short": "-q",
+      "type": "bool"
+    },
+    {
+      "long": "--silent",
+      "short": "-s",
+      "type": "bool"
+    },
+    {
+      "long": "--verbose",
+      "short": "-v",
+      "type": "bool"
+    },
+    {
+      "long": "--zero",
+      "short": "-z",
       "type": "bool"
     }
   ],

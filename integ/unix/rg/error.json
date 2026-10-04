@@ -129,7 +129,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "rg -l hello /data/a.txt /data/nosuch.txt",
+      "command": "rg -j1 -l hello /data/a.txt /data/nosuch.txt",
       "expect": {
         "exit": 2,
         "stdout": "/data/a.txt\n",
@@ -163,7 +163,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "rg -A1 hello /data/a.txt /data/nosuch.txt",
+      "command": "rg -j1 -A1 hello /data/a.txt /data/nosuch.txt",
       "expect": {
         "exit": 2,
         "stdout": "/data/a.txt:hello\n/data/a.txt-world\n",
@@ -197,7 +197,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "rg --type txt hello /data/a.txt /data/nosuch.txt",
+      "command": "rg -j1 --type txt hello /data/a.txt /data/nosuch.txt",
       "expect": {
         "exit": 2,
         "stdout": "/data/a.txt:hello\n",
@@ -231,7 +231,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "rg -c hello /data/a.txt /data/nosuch.txt",
+      "command": "rg -j1 -c hello /data/a.txt /data/nosuch.txt",
       "expect": {
         "exit": 2,
         "stdout": "/data/a.txt:1\n",
@@ -265,7 +265,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "rg hello /data/a.txt /data/nosuch.txt",
+      "command": "rg -j1 hello /data/a.txt /data/nosuch.txt",
       "expect": {
         "exit": 2,
         "stdout": "/data/a.txt:hello\n",
@@ -299,7 +299,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "(cd /data && rg zzzq sub nope)",
+      "command": "(cd /data && rg -j1 zzzq sub nope)",
       "expect": {
         "exit": 2,
         "stdout": "",
@@ -333,7 +333,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "(cd /data && rg -l zzzq nope sub)",
+      "command": "(cd /data && rg -j1 -l zzzq nope sub)",
       "expect": {
         "exit": 2,
         "stdout": "",
@@ -407,7 +407,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "(cd /data && rg -C1 hello nope a.txt)",
+      "command": "(cd /data && rg -j1 -C1 hello nope a.txt)",
       "expect": {
         "exit": 2,
         "stdout": "a.txt:hello\na.txt-world\n",

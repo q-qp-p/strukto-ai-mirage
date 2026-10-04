@@ -259,6 +259,197 @@
           }
         }
       ]
+    },
+    {
+      "id": "version_names_the_pyodide_guest",
+      "hosts": [
+        "typescript"
+      ],
+      "world": {
+        "runtimes": [
+          "pyodide",
+          "workspace"
+        ],
+        "mounts": {
+          "/ram": {
+            "vfs": "ram",
+            "files": {
+              "version.py": "import sys; print(sys.argv[-1])\n"
+            }
+          }
+        }
+      },
+      "steps": [
+        {
+          "command": "v=$(python3 -c 'import sys; print(sys.version.split()[0])'); for n in python python3; do for f in --version -V -VV; do test \"$($n $f 2>&1)\" = \"Python $v (pyodide)\" && echo ok; done; done",
+          "expect": {
+            "exit": 0,
+            "stdout": "ok\nok\nok\nok\nok\nok\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 -c 'import sys; print(sys.argv[-1])' --version",
+          "expect": {
+            "exit": 0,
+            "stdout": "--version\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 /ram/version.py --version",
+          "expect": {
+            "exit": 0,
+            "stdout": "--version\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "echo 'import sys; print(sys.argv[-1])' | python3 - --version",
+          "expect": {
+            "exit": 0,
+            "stdout": "--version\n",
+            "stderr": ""
+          }
+        }
+      ]
+    },
+    {
+      "id": "no_input_and_missing_scripts",
+      "hosts": [
+        "typescript"
+      ],
+      "world": {
+        "runtimes": [
+          "pyodide",
+          "workspace"
+        ],
+        "mounts": {
+          "/ram": {
+            "vfs": "ram"
+          }
+        }
+      },
+      "steps": [
+        {
+          "command": "python3",
+          "expect": {
+            "exit": 1,
+            "stderr_contains": "no input"
+          }
+        },
+        {
+          "command": "cd /ram && python3 missing.py",
+          "expect": {
+            "exit": 1,
+            "stderr_contains": "No such file"
+          }
+        },
+        {
+          "command": "python /missing-script",
+          "expect": {
+            "exit": 1,
+            "stdout": "",
+            "stderr": "python: /missing-script: No such file\n"
+          }
+        },
+        {
+          "command": "python3 /missing-script",
+          "expect": {
+            "exit": 1,
+            "stdout": "",
+            "stderr": "python3: /missing-script: No such file\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "warning_and_x_options",
+      "hosts": [
+        "typescript"
+      ],
+      "world": {
+        "runtimes": [
+          "pyodide",
+          "workspace"
+        ]
+      },
+      "steps": [
+        {
+          "command": "python3 -W nonsense -c 'print(42)'",
+          "expect": {
+            "exit": 0,
+            "stdout": "42\n",
+            "stderr": "Invalid -W option ignored: invalid action: 'nonsense'\n"
+          }
+        },
+        {
+          "command": "python3 -X nosuchopt -c 'import sys; print(sys._xoptions)'",
+          "expect": {
+            "exit": 0,
+            "stdout": "{'nosuchopt': True}\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 -X dev -c 'print(7)'",
+          "expect": {
+            "exit": 0,
+            "stdout": "7\n",
+            "stderr": "python3: warning: -X dev is ignored by the 'pyodide' runtime\n"
+          }
+        }
+      ]
+    },
+    {
+      "id": "shadowing_function_and_the_handoff",
+      "hosts": [
+        "typescript"
+      ],
+      "world": {
+        "runtimes": [
+          "pyodide",
+          "workspace"
+        ]
+      },
+      "steps": [
+        {
+          "command": "python3() { echo \"$@\"; }",
+          "expect": {
+            "exit": 0
+          }
+        },
+        {
+          "command": "python3 -c payload -u x",
+          "expect": {
+            "exit": 0,
+            "stdout": "-c payload -u x\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "command python3 -c \"import sys; print(sys.argv)\" -u x",
+          "expect": {
+            "exit": 0,
+            "stdout": "['-c', '-u', 'x']\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "unset -f python3",
+          "expect": {
+            "exit": 0
+          }
+        },
+        {
+          "command": "python3 -c \"import sys; print(sys.argv)\" -u x",
+          "expect": {
+            "exit": 0,
+            "stdout": "['-c', '-u', 'x']\n",
+            "stderr": ""
+          }
+        }
+      ]
     }
   ]
 }

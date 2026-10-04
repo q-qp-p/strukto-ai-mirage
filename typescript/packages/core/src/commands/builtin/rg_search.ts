@@ -94,8 +94,9 @@ export interface RgFlags {
   noMessages: boolean
   // The regex engine: `default` (ripgrep's own), `pcre2` or `auto`.
   engine: string
-  // PCRE2's UTF and UCP, on unless --no-pcre2-unicode.
-  pcre2Unicode: boolean
+  // Unicode mode for either engine, on unless --no-unicode (or its alias
+  // --no-pcre2-unicode) was given last.
+  unicode: boolean
 }
 
 /**

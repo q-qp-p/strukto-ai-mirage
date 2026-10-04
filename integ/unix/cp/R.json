@@ -34,6 +34,41 @@
       "flags": [
         "R"
       ]
+    },
+    {
+      "id": "cp_r_into_its_own_subtree_copies_all_but_the_new_copy",
+      "seq": 15000085,
+      "targets": [
+        "ram",
+        "disk",
+        "redis",
+        "opfs",
+        "s3",
+        "databricks",
+        "gridfs",
+        "s3-prefix",
+        "databricks-prefix",
+        "gridfs-prefix",
+        "dropbox",
+        "dropbox-root",
+        "onedrive",
+        "sharepoint",
+        "sharepoint-prefix",
+        "ssh",
+        "nextcloud",
+        "gdrive",
+        "gdrive-folder",
+        "box"
+      ],
+      "command": "(mkdir -p /data/fc0c/d/s && echo a > /data/fc0c/d/f && echo b > /data/fc0c/d/s/g && cd /data/fc0c && cp -r d d; echo rc=$?; find d | sort; mkdir -p k/z && echo q > k/z/y && cp -r k k/z; echo rc=$?; find k | sort; cd / && rm -rf /data/fc0c)",
+      "expect": {
+        "exit": 0,
+        "stdout": "rc=1\nd\nd/d\nd/d/f\nd/d/s\nd/d/s/g\nd/f\nd/s\nd/s/g\nrc=1\nk\nk/z\nk/z/k\nk/z/k/z\nk/z/k/z/y\nk/z/y\n",
+        "stderr": "cp: cannot copy a directory, 'd', into itself, 'd/d'\ncp: cannot copy a directory, 'k', into itself, 'k/z/k'\n"
+      },
+      "flags": [
+        "r"
+      ]
     }
   ]
 }

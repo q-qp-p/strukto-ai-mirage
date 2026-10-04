@@ -515,7 +515,6 @@ export async function fanOutTraversal(
       [...texts],
       flagKwargs,
       runOperand,
-      stdin,
     )
     io.producer = {
       command: cmdName,

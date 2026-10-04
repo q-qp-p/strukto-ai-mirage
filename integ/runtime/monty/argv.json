@@ -134,6 +134,75 @@
           }
         }
       ]
+    },
+    {
+      "id": "script_operand_flags_and_argv",
+      "world": {
+        "runtimes": [
+          "monty",
+          "workspace"
+        ],
+        "mounts": {
+          "/ram": {
+            "vfs": "ram",
+            "files": {
+              "n.py": "print(42)\n",
+              "a0.py": "print(argv[0])\n",
+              "a1.py": "print(argv[1])\n"
+            }
+          }
+        }
+      },
+      "steps": [
+        {
+          "command": "python3 -u /ram/n.py",
+          "expect": {
+            "exit": 0,
+            "stdout": "42\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 /ram/a0.py",
+          "expect": {
+            "exit": 0,
+            "stdout": "/ram/a0.py\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 /ram/a1.py --not-my-flag",
+          "expect": {
+            "exit": 0,
+            "stdout": "--not-my-flag\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "echo 'print(7)' | python3 -",
+          "expect": {
+            "exit": 0,
+            "stdout": "7\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 -u -q -c 'print(1)'",
+          "expect": {
+            "exit": 0,
+            "stdout": "1\n",
+            "stderr": ""
+          }
+        },
+        {
+          "command": "python3 -O -c 'print(1)'",
+          "expect": {
+            "exit": 0,
+            "stdout": "1\n",
+            "stderr": "python3: warning: -O is ignored by the 'monty' runtime\n"
+          }
+        }
+      ]
     }
   ]
 }

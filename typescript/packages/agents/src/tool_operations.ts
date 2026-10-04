@@ -171,7 +171,7 @@ export class MirageToolOperations {
   ): Promise<ToolResult> {
     let content: string
     try {
-      content = (await this.versions.readForEdit(path)).toString('utf8')
+      content = decode(await this.versions.readForEdit(path))
     } catch (err) {
       if (err instanceof StaleMirageFileError) return errorResult(`Error: ${err.message}`)
       if (!(await this.versions.vfs.exists(path))) {
