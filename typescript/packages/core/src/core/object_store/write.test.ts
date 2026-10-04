@@ -183,13 +183,18 @@ describe('object_store write', () => {
     expect(store.puts).toEqual([])
   })
 
-  it('mkdir without marker support is a no-op', async () => {
-    const store = new FakeStore()
-    const driver = { ...makeDriver(store), markersSupported: false }
-    const manager = await managed(() => makeMkdir(driver)(accessor, spec('/a/b'), true))
-    expect(store.contents()).toEqual({})
-    expect(manager.writes).toEqual([])
-  })
+  // Without markers a parent made a moment ago has no row, so even a
+  // plain mkdir under it cannot be checked and stays a no-op.
+  it.each([true, false])(
+    'mkdir without marker support is a no-op (parents %s)',
+    async (parents) => {
+      const store = new FakeStore()
+      const driver = { ...makeDriver(store), markersSupported: false }
+      const manager = await managed(() => makeMkdir(driver)(accessor, spec('/a/b'), parents))
+      expect(store.contents()).toEqual({})
+      expect(manager.writes).toEqual([])
+    },
+  )
 })
 
 // ── the backend token the put answered reaches the op record ───────────

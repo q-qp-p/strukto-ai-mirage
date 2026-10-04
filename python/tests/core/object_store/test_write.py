@@ -143,11 +143,14 @@ def test_mkdir_refuses_a_directory_under_a_file(accessor):
     assert store.puts == []
 
 
-def test_mkdir_without_marker_support_is_a_no_op(accessor):
+@pytest.mark.parametrize("parents", [True, False])
+def test_mkdir_without_marker_support_is_a_no_op(accessor, parents):
+    # Without markers a parent made a moment ago has no row, so even a
+    # plain mkdir under it cannot be checked and stays a no-op.
     store = FakeStore()
     driver = replace(make_driver(store), markers_supported=False)
     manager = _managed(
-        make_mkdir(driver)(accessor, spec("/a/b"), parents=True)
+        make_mkdir(driver)(accessor, spec("/a/b"), parents=parents)
     )
     assert store.objects == {}
     assert manager.writes == []

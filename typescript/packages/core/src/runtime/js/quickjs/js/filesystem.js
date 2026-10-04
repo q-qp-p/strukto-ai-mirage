@@ -41,6 +41,10 @@ std.open = (path, mode, errorObj) => {
       return 0
     },
     tell: () => __mirage_tell(fd),
+    error: () => __mirage_ferror(fd),
+    clearerr: () => {
+      __mirage_clearerr(fd)
+    },
     eof: () => {
       fill(1)
       return __mirage_eof(fd)

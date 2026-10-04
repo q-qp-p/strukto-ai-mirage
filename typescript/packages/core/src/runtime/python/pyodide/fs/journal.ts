@@ -93,6 +93,14 @@ export interface MutationJournal {
   markSetattr(path: string, attrs: SetAttrFields): void
   /** Drain the journal: every mutation in guest order, cleared. */
   takeMutations(): MirageMutation[]
+  /**
+   * Record nothing more until `reopen`: the guest called `os._exit`, and
+   * a process that exited writes nothing after it, even when the guest
+   * catches the exit and runs on.
+   */
+  seal(): void
+  /** Record again, for the next run. */
+  reopen(): void
 }
 
 // An append or pwrite holds its bytes as parts until the drain, so a loop
@@ -105,11 +113,16 @@ type Pending =
 
 export function createJournal(): MutationJournal {
   const journal: Pending[] = []
+  let sealed = false
+  const record = (entry: Pending): void => {
+    if (!sealed) journal.push(entry)
+  }
   return {
     markCreate(path) {
-      journal.push({ kind: 'create', path })
+      record({ kind: 'create', path })
     },
     markAppend(path, offset, bytes) {
+      if (sealed) return
       // A guest buffer handed over by pyodide can be a view into WASM
       // memory, which relocates when the heap grows; copy on arrival so
       // the journal owns bytes that stay valid until the drain.
@@ -126,9 +139,10 @@ export function createJournal(): MutationJournal {
         last.length += owned.length
         return
       }
-      journal.push({ kind: 'append', path, parts: [owned] })
+      record({ kind: 'append', path, parts: [owned] })
     },
     markPwrite(path, offset, bytes) {
+      if (sealed) return
       const owned = new Uint8Array(bytes)
       const last = journal[journal.length - 1]
       if (last?.kind === 'pwrite' && last.path === path && last.offset + last.length === offset) {
@@ -136,28 +150,34 @@ export function createJournal(): MutationJournal {
         last.length += owned.length
         return
       }
-      journal.push({ kind: 'pwrite', path, offset, parts: [owned], length: owned.length })
+      record({ kind: 'pwrite', path, offset, parts: [owned], length: owned.length })
     },
     markTruncate(path, length) {
-      journal.push({ kind: 'truncate', path, length })
+      record({ kind: 'truncate', path, length })
     },
     markMkdir(path) {
-      journal.push({ kind: 'mkdir', path })
+      record({ kind: 'mkdir', path })
     },
     markUnlink(path) {
-      journal.push({ kind: 'unlink', path })
+      record({ kind: 'unlink', path })
     },
     markRmdir(path) {
-      journal.push({ kind: 'rmdir', path })
+      record({ kind: 'rmdir', path })
     },
     markRename(src, dst) {
-      journal.push({ kind: 'rename', path: src, dst })
+      record({ kind: 'rename', path: src, dst })
     },
     markSymlink(path, target) {
-      journal.push({ kind: 'symlink', path, target })
+      record({ kind: 'symlink', path, target })
     },
     markSetattr(path, attrs) {
-      journal.push({ kind: 'setattr', path, attrs })
+      record({ kind: 'setattr', path, attrs })
+    },
+    seal() {
+      sealed = true
+    },
+    reopen() {
+      sealed = false
     },
     takeMutations() {
       return journal.splice(0, journal.length).map((entry): MirageMutation => {

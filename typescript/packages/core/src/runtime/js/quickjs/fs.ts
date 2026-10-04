@@ -84,6 +84,15 @@ export function installQuickJsFs(
   vfs: RuntimeVFS | null,
 ): () => Promise<string[]> {
   const table = new FileTable<FileHandle>()
+  // qjs-libc's fopen opens a directory for reading, and every read of it
+  // then fails: it answers nothing and sets the stream's error flag.
+  const directories = new Set<number>()
+  const failed = new Set<number>()
+  const readFails = (fd: number): boolean => {
+    if (!directories.has(fd)) return false
+    failed.add(fd)
+    return true
+  }
   let cwd = PathSpec.fromStrPath('/')
   const absolute = (handle: QuickJSHandle): string => {
     const path = ctx.getString(handle)
@@ -147,8 +156,16 @@ export function installQuickJsFs(
     // denial on an existing file must refuse the open, or a
     // create-capable mode would create over content this open never saw.
     let handle: FileHandle
+    let directory = false
     try {
-      const row = await openRow(vfs, path, mode)
+      let row: VFSStat | null
+      try {
+        row = await applyOpen(vfs, path, mode)
+      } catch (err) {
+        if (mode.writable || classify(err) !== 'EISDIR') throw err
+        row = null
+        directory = true
+      }
       // Nothing is read at open: the handle fetches what a read lands in.
       // A handle that writes reads the stored bytes, since its writes land
       // on them; a read-only one sees the rendering.
@@ -167,11 +184,16 @@ export function installQuickJsFs(
     } catch (err) {
       return ctx.newNumber(-errnoFor(err))
     }
-    return ctx.newNumber(table.add(handle))
+    const fd = table.add(handle)
+    if (directory) directories.add(fd)
+    return ctx.newNumber(fd)
   })
 
   defineAsync('__mirage_close', async (fdH) => {
-    const file = table.pop(ctx.getNumber(fdH))
+    const fd = ctx.getNumber(fdH)
+    directories.delete(fd)
+    failed.delete(fd)
+    const file = table.pop(fd)
     if (file === undefined) return ctx.undefined
     if (file.dirty && vfs !== null) await vfs.flush(file.path, file.flushPlan())
     return ctx.undefined
@@ -199,20 +221,31 @@ export function installQuickJsFs(
   })
 
   defineSync('__mirage_read', (fdH, maxH) => {
-    const file = table.get(ctx.getNumber(fdH))
-    if (file === undefined) return ctx.newString('')
+    const fd = ctx.getNumber(fdH)
+    const file = table.get(fd)
+    if (file === undefined || readFails(fd)) return ctx.newString('')
     return toGuestText(ctx, DEC.decode(file.read(ctx.getNumber(maxH))))
   })
 
   defineSync('__mirage_read_bytes', (fdH, maxH) => {
-    const file = table.get(ctx.getNumber(fdH))
-    const bytes = file === undefined ? new Uint8Array(0) : file.read(ctx.getNumber(maxH))
+    const fd = ctx.getNumber(fdH)
+    const file = table.get(fd)
+    const bytes =
+      file === undefined || readFails(fd) ? new Uint8Array(0) : file.read(ctx.getNumber(maxH))
     return ctx.newArrayBuffer(bytes.slice().buffer)
   })
 
   defineSync('__mirage_getline', (fdH) => {
-    const line = table.get(ctx.getNumber(fdH))?.readLine() ?? null
+    const fd = ctx.getNumber(fdH)
+    const line = readFails(fd) ? null : (table.get(fd)?.readLine() ?? null)
     return line === null ? ctx.null : toGuestText(ctx, DEC.decode(line))
+  })
+
+  defineSync('__mirage_ferror', (fdH) => (failed.has(ctx.getNumber(fdH)) ? ctx.true : ctx.false))
+
+  defineSync('__mirage_clearerr', (fdH) => {
+    failed.delete(ctx.getNumber(fdH))
+    return ctx.undefined
   })
 
   defineSync('__mirage_write', (fdH, textH) => {
@@ -323,19 +356,5 @@ export function installQuickJsFs(
       }
     }
     return failures
-  }
-}
-
-/**
- * The row an open's content starts from, by the shared open rule, except
- * that qjs-libc's fopen opens a directory for reading (its reads then
- * fail), so a read-only open of one is an empty file here.
- */
-async function openRow(vfs: RuntimeVFS, path: string, mode: OpenMode): Promise<VFSStat | null> {
-  try {
-    return await applyOpen(vfs, path, mode)
-  } catch (err) {
-    if (mode.writable || classify(err) !== 'EISDIR') throw err
-    return null
   }
 }

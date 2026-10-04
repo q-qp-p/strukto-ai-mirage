@@ -91,7 +91,9 @@ export function displayError(err: unknown): string {
 export function guestError(code: GuestCode, path: string, target?: string): Error {
   const row = cpythonError(code)
   const where = target === undefined ? `'${path}'` : `'${path}' -> '${target}'`
-  const guest = new Error(`[Errno ${String(row.errno)}] ${row.phrase}: ${where}`)
+  const guest = Object.assign(new Error(`[Errno ${String(row.errno)}] ${row.phrase}: ${where}`), {
+    guestCondition: code,
+  })
   guest.name = row.exception
   return guest
 }
@@ -115,9 +117,9 @@ export function guestError(code: GuestCode, path: string, target?: string): Erro
  */
 export function asGuestError(err: unknown, path: string, target?: string): unknown {
   // A guest exception this door already built (a refusal before any
-  // mount op) is CPython's shape already, and keeps its own condition.
-  if (err instanceof Error && Object.values(CPYTHON).some((row) => row.exception === err.name)) {
-    return err
-  }
+  // mount op) is CPython's shape already, and keeps its own condition. A
+  // backend error that merely shares a CPython name is classified like
+  // any other.
+  if ((err as { guestCondition?: unknown }).guestCondition !== undefined) return err
   return guestError(classify(err) ?? 'EIO', path, target)
 }

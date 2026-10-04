@@ -139,6 +139,15 @@
               "stdout": "opened\nrow survived true 40000\n"
             }
           }
+        },
+        {
+          "program": {
+            "js": "const f = std.open('/data/sub', 'r')\nconsole.log(JSON.stringify(f.readAsString()), f.error())\nf.clearerr()\nconsole.log(f.error())\nf.close()"
+          },
+          "expect": {
+            "exit": 0,
+            "stdout": "\"\" true\nfalse\n"
+          }
         }
       ]
     },

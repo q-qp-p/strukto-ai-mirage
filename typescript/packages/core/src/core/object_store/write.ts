@@ -182,9 +182,12 @@ export function makeMkdir<A extends Accessor, C>(driver: ObjectStoreDriver<A, C>
       const up = parent(norm(path.mountPath))
       // mkdir(2) makes one directory, under one that exists; only `-p`
       // makes the chain, so a marker under a missing parent answers
-      // ENOENT however the caller reached it.
+      // ENOENT however the caller reached it. A store without markers
+      // holds no empty directory, so a parent made a moment ago has no
+      // row to find.
       if (
         !parents &&
+        driver.markersSupported !== false &&
         up !== '/' &&
         (await rowAt(stat, accessor, kp.mountedPath(path, up))) === null
       ) {

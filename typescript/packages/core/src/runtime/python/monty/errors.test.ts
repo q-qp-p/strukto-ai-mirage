@@ -98,6 +98,12 @@ describe('asGuestError', () => {
       '/x',
       "[Errno 5] Input/output error: '/x'",
     ],
+    [
+      'a backend error that only shares a CPython name',
+      Object.assign(new Error('gone'), { name: 'OSError' }),
+      '/x',
+      "[Errno 5] Input/output error: '/x'",
+    ],
   ])('converts %s to an OSError', (_name, raw, path, message) => {
     const guest = asGuestError(raw, path) as Error
     expect(guest.name).toBe('OSError')
@@ -107,5 +113,10 @@ describe('asGuestError', () => {
   it('keeps a guest error this door already built', () => {
     const built = guestError('ENOENT', '/x')
     expect(asGuestError(built, '/y')).toBe(built)
+  })
+
+  it('classifies a backend error by its code, whatever its name', () => {
+    const raw = Object.assign(new Error('gone'), { name: 'OSError', code: 'ENOENT' })
+    expect((asGuestError(raw, '/x') as Error).name).toBe('FileNotFoundError')
   })
 })
