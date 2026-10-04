@@ -13,12 +13,13 @@
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import { parseCommandLimits } from '@struktoai/mirage-core/policy/builtin/output_cap'
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CreateBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { MongoClient } from 'mongodb'
+import type { FileEntryWithStats, SFTPWrapper } from 'ssh2'
 import {
   buildRuntime,
   CLISpec,
@@ -1018,6 +1019,45 @@ function backendVariants(testCase: Case): Case[] {
   })
 }
 
+// Remove the directory each disk and ssh backend mount was given; an ssh root
+// goes over the mount's own connection, so this runs before the close.
+async function removeRoots(ws: Workspace): Promise<void> {
+  for (const entry of ws.mounts()) {
+    const vfs = entry.vfs
+    if (vfs instanceof DiskVFS) rmSync(vfs.root, { recursive: true })
+    else if (vfs instanceof SSHVFS)
+      await removeRemote(await vfs.accessor.sftp(), vfs.config.root ?? '/')
+  }
+}
+
+async function removeRemote(sftp: SFTPWrapper, dir: string): Promise<void> {
+  const entries = await new Promise<FileEntryWithStats[]>((resolveFn, rejectFn) => {
+    sftp.readdir(dir, (err, list) => {
+      if (err) rejectFn(err)
+      else resolveFn(list)
+    })
+  })
+  for (const entry of entries) {
+    const path = `${dir}/${entry.filename}`
+    if (entry.attrs.isDirectory()) {
+      await removeRemote(sftp, path)
+      continue
+    }
+    await new Promise<void>((resolveFn, rejectFn) => {
+      sftp.unlink(path, (err) => {
+        if (err) rejectFn(err)
+        else resolveFn()
+      })
+    })
+  }
+  await new Promise<void>((resolveFn, rejectFn) => {
+    sftp.rmdir(dir, (err) => {
+      if (err) rejectFn(err)
+      else resolveFn()
+    })
+  })
+}
+
 async function runCase(suite: string, testCase: Case): Promise<string[]> {
   const caseId = `${suite}/${testCase.id}`
   const world = testCase.world ?? {}
@@ -1063,7 +1103,11 @@ async function runCase(suite: string, testCase: Case): Promise<string[]> {
       problems.push(...(await runStep(ws, caseId, index, step)))
     }
   } finally {
-    await ws.close()
+    try {
+      await removeRoots(ws)
+    } finally {
+      await ws.close()
+    }
   }
   return problems
 }

@@ -26,6 +26,7 @@ import logging  # noqa: E402
 import os  # noqa: E402
 import re  # noqa: E402
 import shlex  # noqa: E402
+import shutil  # noqa: E402
 import tempfile  # noqa: E402
 import uuid  # noqa: E402
 from collections.abc import Awaitable, Callable  # noqa: E402
@@ -1020,6 +1021,22 @@ def _backend_variants(case: dict[str, Any]) -> list[dict[str, Any]]:
     return variants
 
 
+async def _remove_roots(ws: Workspace) -> None:
+    """Remove the directory each disk and ssh backend mount was given.
+
+    Args:
+        ws (Workspace): the case's workspace, still open, since an ssh
+            root goes over the mount's own connection.
+    """
+    for entry in ws.mounts():
+        vfs = entry.vfs
+        if vfs.name == "disk":
+            await asyncio.to_thread(shutil.rmtree, vfs.root)
+        elif vfs.name == "ssh":
+            sftp = await vfs.accessor.sftp()
+            await sftp.rmtree(vfs.config.root)
+
+
 async def _run_case(suite: str, case: dict[str, Any]) -> list[str]:
     case_id = f"{suite}/{case['id']}"
     world = case.get("world", {})
@@ -1062,7 +1079,10 @@ async def _run_case(suite: str, case: dict[str, Any]) -> list[str]:
                 }
             problems.extend(await _run_step(ws, case_id, index, step))
     finally:
-        await ws.close()
+        try:
+            await _remove_roots(ws)
+        finally:
+            await ws.close()
     return problems
 
 
