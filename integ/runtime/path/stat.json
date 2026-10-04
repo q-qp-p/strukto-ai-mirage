@@ -142,11 +142,11 @@
         },
         {
           "program": {
-            "js": "const f = std.open('/data/sub', 'r')\nconsole.log(JSON.stringify(f.readAsString()), f.error())\nf.clearerr()\nconsole.log(f.error())\nf.close()"
+            "js": "const f = std.open('/data/sub', 'r')\nconsole.log(f.read(new ArrayBuffer(4), 0, 0), JSON.stringify(f.readAsString(0)), f.error())\nconsole.log(JSON.stringify(f.readAsString()), f.error())\nf.clearerr()\nconsole.log(f.error())\nf.close()"
           },
           "expect": {
             "exit": 0,
-            "stdout": "\"\" true\nfalse\n"
+            "stdout": "0 \"\" false\n\"\" true\nfalse\n"
           }
         }
       ]

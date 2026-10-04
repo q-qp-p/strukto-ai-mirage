@@ -85,11 +85,13 @@ export function installQuickJsFs(
 ): () => Promise<string[]> {
   const table = new FileTable<FileHandle>()
   // qjs-libc's fopen opens a directory for reading, and every read of it
-  // then fails: it answers nothing and sets the stream's error flag.
+  // then fails: it answers nothing and sets the stream's error flag. A
+  // read of zero bytes never reaches the stream, so it leaves the flag.
   const directories = new Set<number>()
   const failed = new Set<number>()
-  const readFails = (fd: number): boolean => {
+  const readFails = (fd: number, size = -1): boolean => {
     if (!directories.has(fd)) return false
+    if (size === 0) return true
     failed.add(fd)
     return true
   }
@@ -223,15 +225,16 @@ export function installQuickJsFs(
   defineSync('__mirage_read', (fdH, maxH) => {
     const fd = ctx.getNumber(fdH)
     const file = table.get(fd)
-    if (file === undefined || readFails(fd)) return ctx.newString('')
-    return toGuestText(ctx, DEC.decode(file.read(ctx.getNumber(maxH))))
+    const size = ctx.getNumber(maxH)
+    if (file === undefined || readFails(fd, size)) return ctx.newString('')
+    return toGuestText(ctx, DEC.decode(file.read(size)))
   })
 
   defineSync('__mirage_read_bytes', (fdH, maxH) => {
     const fd = ctx.getNumber(fdH)
     const file = table.get(fd)
-    const bytes =
-      file === undefined || readFails(fd) ? new Uint8Array(0) : file.read(ctx.getNumber(maxH))
+    const size = ctx.getNumber(maxH)
+    const bytes = file === undefined || readFails(fd, size) ? new Uint8Array(0) : file.read(size)
     return ctx.newArrayBuffer(bytes.slice().buffer)
   })
 
