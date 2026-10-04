@@ -138,7 +138,8 @@ class MirageToolkit(Toolkit):
         new_string: str,
         replace_all: bool = False,
     ) -> str:
-        """Replace a string in a file read first.
+        """Replace a string in an existing file, refusing one that changed
+        since it was last read.
 
         Args:
             path (str): Absolute path of the file to edit.

@@ -13,6 +13,7 @@
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, openSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -22,11 +23,16 @@ import { readDaemonTable, validateDaemonTable } from '@struktoai/mirage-server/d
 import { mirageHome } from '@struktoai/mirage-server/paths'
 
 import { ENV_AUTH_MODE, ENV_AUTH_TOKEN, ENV_DAEMON_PORT, ENV_IDLE_GRACE_SECONDS } from './env.ts'
-import type { DaemonSettings } from './settings.ts'
+import { isLocalUrl, type DaemonSettings } from './settings.ts'
 
 const requireFromHere = createRequire(import.meta.url)
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
+
+/** The daemon is down and may not be spawned, or a spawned one never answered. */
+export class DaemonUnreachable extends Error {
+  override readonly name = 'DaemonUnreachable'
+}
 
 export class DaemonClient {
   readonly settings: DaemonSettings
@@ -44,7 +50,7 @@ export class DaemonClient {
   async request(
     method: string,
     path: string,
-    init: RequestInit & { timeoutMs?: number } = {},
+    init: RequestInit & { timeoutMs?: number | null } = {},
   ): Promise<Response> {
     const { timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS, ...rest } = init
     const headers: Record<string, string> = {
@@ -54,6 +60,7 @@ export class DaemonClient {
     if (rest.body !== undefined && headers['Content-Type'] === undefined) {
       headers['Content-Type'] = 'application/json'
     }
+    if (timeoutMs === null) return fetch(this.settings.url + path, { ...rest, method, headers })
     const ctrl = new AbortController()
     const t = setTimeout(() => {
       ctrl.abort()
@@ -70,21 +77,39 @@ export class DaemonClient {
     }
   }
 
-  async requestMultipart(method: string, path: string, form: FormData): Promise<Response> {
-    const ctrl = new AbortController()
-    const t = setTimeout(() => {
-      ctrl.abort()
-    }, DEFAULT_REQUEST_TIMEOUT_MS)
-    try {
-      return await fetch(this.settings.url + path, {
-        method,
-        headers: this.headers(),
-        body: form,
-        signal: ctrl.signal,
-      })
-    } finally {
-      clearTimeout(t)
+  /**
+   * Send a JSON `request` part and then `part`, streamed from its data
+   * as it is read, as one multipart body. There is no overall timeout,
+   * since the upload lasts as long as its input; `signal` aborts it.
+   */
+  async requestUpload(
+    method: string,
+    path: string,
+    request: Record<string, unknown>,
+    part: { name: string; data: AsyncIterable<Uint8Array> },
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const boundary = `mirage-${randomUUID()}`
+    const text = new TextEncoder()
+    const head = text.encode(
+      `--${boundary}\r\nContent-Disposition: form-data; name="request"; filename="request.json"\r\n` +
+        `Content-Type: application/json\r\n\r\n${JSON.stringify(request)}\r\n` +
+        `--${boundary}\r\nContent-Disposition: form-data; name="${part.name}"; filename="${part.name}.bin"\r\n` +
+        'Content-Type: application/octet-stream\r\n\r\n',
+    )
+    const tail = text.encode(`\r\n--${boundary}--\r\n`)
+    async function* parts(): AsyncGenerator<Uint8Array> {
+      yield head
+      for await (const chunk of part.data) yield chunk
+      yield tail
     }
+    return fetch(this.settings.url + path, {
+      method,
+      headers: this.headers({ 'Content-Type': `multipart/form-data; boundary=${boundary}` }),
+      body: ReadableStream.from(parts()),
+      duplex: 'half',
+      ...(signal !== undefined ? { signal } : {}),
+    } as RequestInit)
   }
 
   async isReachable(timeoutMs = 500): Promise<boolean> {
@@ -109,9 +134,12 @@ export class DaemonClient {
     const allowSpawn = opts.allowSpawn ?? true
     const timeoutMs = opts.timeoutMs ?? 5000
     if (await this.isReachable()) return
+    if (!isLocalUrl(this.settings.url)) {
+      throw new DaemonUnreachable(`daemon not reachable at ${this.settings.url}`)
+    }
     if (!allowSpawn) {
-      throw new Error(
-        `daemon not reachable at ${this.settings.url}; run \`mirage workspace create CONFIG.yaml\``,
+      throw new DaemonUnreachable(
+        `daemon not reachable at ${this.settings.url}; run \`mirage workspace create CONFIG.yaml\` to spawn one`,
       )
     }
     this.spawnDaemon()
@@ -120,7 +148,9 @@ export class DaemonClient {
       if (await this.isReachable(300)) return
       await new Promise((r) => setTimeout(r, 100))
     }
-    throw new Error(`daemon spawned but did not answer /v1/health within ${String(timeoutMs)}ms`)
+    throw new DaemonUnreachable(
+      `daemon spawned but did not answer /v1/health within ${String(timeoutMs)}ms`,
+    )
   }
 
   private spawnDaemon(): void {
@@ -131,7 +161,9 @@ export class DaemonClient {
       if (typeof v === 'string') env[k] = v
     }
     env[ENV_DAEMON_PORT] = String(this.resolvePort(table))
-    env[ENV_IDLE_GRACE_SECONDS] = String(this.settings.idleGraceSeconds)
+    if ((env[ENV_IDLE_GRACE_SECONDS] ?? '') === '') {
+      env[ENV_IDLE_GRACE_SECONDS] = String(this.settings.idleGraceSeconds)
+    }
     if (this.settings.authToken === '') {
       this.settings.authToken = ensureTokenFile(defaultTokenFile())
     }

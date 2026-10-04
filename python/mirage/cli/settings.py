@@ -17,6 +17,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from mirage.cli.env import ENV_DAEMON_URL, ENV_TOKEN
 from mirage.server.auth import storage as auth_storage
@@ -69,6 +70,21 @@ _ENV_FOR_KEY = {
 }
 
 
+def is_local_url(url: str) -> bool:
+    """Whether a daemon URL points at this machine.
+
+    Only such a URL may use the local token file or start a daemon,
+    so neither the file's token nor a spawn ever goes to a remote host.
+
+    Args:
+        url (str): the daemon URL.
+
+    Returns:
+        bool: True when its host is a loopback name.
+    """
+    return (urlsplit(url).hostname or "") in DEFAULT_ALLOWED_HOSTS
+
+
 @dataclass
 class DaemonSettings:
     url: str = DEFAULT_DAEMON_URL
@@ -90,6 +106,8 @@ def load_daemon_settings(path: Path | None = None) -> DaemonSettings:
         3. values in ``$MIRAGE_HOME/config.toml`` (default
            ``~/.mirage/config.toml``) ``[daemon]`` table
         4. defaults
+
+    With no token from those, a local URL takes the token file's.
 
     Args:
         path (Path | None): config file location. Defaults to
@@ -119,7 +137,7 @@ def load_daemon_settings(path: Path | None = None) -> DaemonSettings:
     env_token = os.environ.get(ENV_TOKEN)
     if env_token:
         settings.auth_token = env_token
-    if not settings.auth_token:
+    if not settings.auth_token and is_local_url(settings.url):
         file_token = auth_storage.read_token_file(
             auth_storage.default_token_file()
         )

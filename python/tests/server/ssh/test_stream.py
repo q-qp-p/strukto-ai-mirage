@@ -24,13 +24,14 @@ from mirage.server.ssh import stream
 from mirage.server.ssh.stream import (
     ChannelInput,
     ChannelOutput,
-    LoopStdin,
+    LineDiscipline,
     Mark,
     decode,
     deliver,
     encode,
     loop_sender,
 )
+from mirage.server.stdin import LoopStdin
 
 Step = str | BaseException
 
@@ -75,11 +76,14 @@ class FakeWriter:
 
 
 class FakeProcess:
-    def __init__(self, steps: list[Step]) -> None:
+    def __init__(
+        self, steps: list[Step], term_type: str | None = None
+    ) -> None:
         self.stdin = FakeStdin(steps)
         self.stdout = FakeWriter()
         self.stderr = FakeWriter()
         self.channel = None
+        self.term_type = term_type
 
 
 async def _started(
@@ -188,9 +192,82 @@ async def test_pump_stops_reading_once_the_buffer_is_full(monkeypatch):
     await source.close()
 
 
+def _discipline(text: str) -> tuple[list[str], str, list[str]]:
+    lines: list[str] = []
+    marks: list[str] = []
+    echo: list[bytes] = []
+    LineDiscipline(
+        echo.append,
+        lambda data: lines.append(data.decode()),
+        lambda: marks.append("interrupt"),
+        lambda: marks.append("eof"),
+    ).feed(text.encode())
+    return lines, b"".join(echo).decode(), marks
+
+
+def test_discipline_echoes_and_hands_over_a_line_at_enter():
+    lines, echo, _ = _discipline("ls -l\r")
+    assert (lines, echo) == (["ls -l\n"], "ls -l\r\n")
+
+
+def test_discipline_treats_crlf_as_one_enter():
+    assert _discipline("a\r\nb\n")[0] == ["a\n", "b\n"]
+
+
+def test_discipline_erases_one_code_point_per_backspace():
+    lines, echo, _ = _discipline("café\x7f\x7fe\r")
+    assert lines == ["cae\n"]
+    assert echo.endswith("\b \b\b \be\r\n")
+
+
+def test_discipline_erases_the_whole_line_on_ctrl_u():
+    assert _discipline("wrong\x15ok\r")[0] == ["ok\n"]
+
+
+def test_discipline_drops_the_half_typed_line_on_ctrl_c():
+    lines, _, marks = _discipline("half\x03next\r")
+    assert (lines, marks) == (["next\n"], ["interrupt"])
+
+
+def test_discipline_reports_ctrl_d_only_on_an_empty_line():
+    assert _discipline("\x04")[2] == ["eof"]
+    assert _discipline("x\x04\r")[2] == []
+
+
+def test_discipline_swallows_escape_sequences():
+    assert _discipline("a\x1b[Ab\x1bOPc\r")[0] == ["abc\n"]
+
+
+def test_discipline_bounds_a_line_and_rings_past_it():
+    lines, echo, _ = _discipline("x" * (stream.MAX_TERMINAL_LINE + 1) + "\r")
+    assert lines == ["x" * stream.MAX_TERMINAL_LINE + "\n"]
+    assert echo.endswith("\x07\r\n")
+
+
+@pytest.mark.asyncio
+async def test_a_pty_without_a_terminal_type_is_cooked_here():
+    process = FakeProcess(["ab\x7fc\r", "\x04"], term_type="")
+    source = ChannelInput(process)
+    source.start()
+    assert await source.readline() == b"ac\n"
+    assert await source.readline() is Mark.EOF
+    assert "".join(process.stdout.data) == "ab\b \bc\r\n"
+
+
+@pytest.mark.asyncio
+async def test_output_on_a_pty_without_a_terminal_type_is_crlf():
+    bare, typed = FakeProcess([], term_type=""), FakeProcess([], "xterm")
+    await ChannelOutput(bare, tty=True).write(b"a\nb\n")
+    await ChannelOutput(typed, tty=True).write(b"a\nb\n")
+    assert (bare.stdout.data, typed.stdout.data) == (
+        ["a\r\nb\r\n"],
+        ["a\nb\n"],
+    )
+
+
 @pytest.mark.asyncio
 async def test_output_folds_stderr_into_stdout_on_a_terminal():
-    plain, tty = FakeProcess([]), FakeProcess([])
+    plain, tty = FakeProcess([]), FakeProcess([], term_type="xterm")
     await ChannelOutput(plain, tty=False).write(b"err", stderr=True)
     await ChannelOutput(tty, tty=True).write(b"err", stderr=True)
     assert (plain.stdout.data, plain.stderr.data) == ([], ["err"])

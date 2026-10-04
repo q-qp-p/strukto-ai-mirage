@@ -1,0 +1,224 @@
+---
+title: In-app
+description: The core every interface reaches. A Workspace, Session handles that run lines and move bytes, the agent tool table, and the MCP and RPC servers to embed.
+icon: cube
+---
+
+The in-app API is what every other interface is built on: [HTTP](/home/access/http), [MCP](/home/access/mcp), [RPC](/home/access/rpc), [SSH](/home/access/ssh) and the [CLI](/home/access/cli) all end in the calls on this page. Use it directly when your agent runs in the same Python process as the workspace.
+
+## Workspace and Session
+
+A `Session` is one session's handle: `shell` runs a line as it, `glob` matches as it, and `vfs` is the file API run as it, so every call answers under the session's [profile](/home/permissions), with its working directory, environment, mount modes and hides.
+
+```python
+import asyncio
+
+from mirage import MountMode, Workspace
+from mirage.vfs.ram import RAMVFS
+
+
+async def main() -> None:
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    session = await ws.session("agent")
+
+    result = await session.shell("echo hello > /notes.txt && wc -c /notes.txt")
+    print(result.exit_code, await result.stdout_str())
+
+    print(await session.glob("/**/*.txt"))
+    print(await session.vfs.read("/notes.txt"))
+
+
+asyncio.run(main())
+```
+
+`ws.session(id)` creates the session when the id is new and adopts it when it exists. Pass `profile=` to create it under one of the workspace's [profiles](/home/permissions), or `mounts=` to narrow its mount modes. A profile, mounts or permissions for an existing session raise `ValueError`, since a profile is set once, when the session is created. `ws.shell(line, session_id=...)` and `ws.glob(pattern, session_id=...)` are the same calls without the handle; without a session id they act as the workspace's default session.
+
+### session.shell
+
+```python
+result = await session.shell(
+    "grep -c ERROR /data/app.log",
+    stdin=None,
+    cwd=None,
+    env=None,
+    cancel=None,
+)
+```
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `command` | | The shell line. |
+| `stdin` | `None` | The line's stdin: `bytes`, or an async iterator of `bytes` to stream it. |
+| `cwd` | `None` | A working directory for this line only. The line runs in a copy of the session, so a `cd` in it does not leak. |
+| `env` | `None` | Variables for this line only, in the same copy. |
+| `cancel` | `None` | An `asyncio.Event`; setting it aborts the line. |
+| `agent_id` | `None` | Who ran it, for history and observability. |
+| `record` | `True` | `False` keeps the line out of history. |
+| `runtime` | `None` | A workspace runtime entry to run the line's captured stages on. |
+
+It answers an `IOResult`: `exit_code`, and `await stdout_str()` / `await stderr_str()` for the text (`stdout` and `stderr` are the lazy byte streams). A non-zero exit is a result, not an exception.
+
+### Cancel a line
+
+Set the event, or cancel the task awaiting the line. The line stops at whatever await it is in, and `$?` goes back to what it was before the line ran. Setting the event raises `MirageAbortError` from the call:
+
+```python
+from mirage.workspace.abort import MirageAbortError
+
+cancel = asyncio.Event()
+line = asyncio.create_task(session.shell("sleep 30", cancel=cancel))
+await asyncio.sleep(1)
+cancel.set()
+try:
+    await line
+except MirageAbortError:
+    print("cancelled")
+```
+
+A command that runs past its [limit](/home/yaml#command-limits) is not a cancel: it exits `124`.
+
+### session.vfs
+
+The file API, run as the session. Paths are absolute workspace paths, and bytes are `bytes`.
+
+| Call | Answers |
+| --- | --- |
+| `await vfs.read(path, offset=0, size=None)` | The bytes, whole or a range. |
+| `await vfs.write(path, data)` / `await vfs.append(path, data)` | Nothing. |
+| `await vfs.stat(path, nofollow=False)` | A `FileStat`: `name`, `type`, `size`, `modified`, `mode`, ... |
+| `await vfs.readdir(path)` | The full path of each entry. |
+| `await vfs.exists(path)` | `True` or `False`. |
+| `await vfs.mkdir(path)`, `rmdir`, `unlink` | Nothing. |
+| `await vfs.rename(src, dst)` | Nothing. |
+| `await vfs.truncate(path, length)` | Nothing. |
+
+A missing path raises `FileNotFoundError`, and a refused one `PermissionError`, as the os module does.
+
+## Beside your own event loop
+
+An app that already runs its own loop, such as a FastAPI or aiohttp server, can pin a workspace to a thread and loop of its own, so a slow call inside the workspace never stalls the app. `runner.call` runs a workspace coroutine there from any loop; the Mirage server hosts every workspace this way.
+
+```python
+from mirage.workspace.runner import WorkspaceRunner
+
+runner = WorkspaceRunner(ws)
+try:
+    result = await runner.call(runner.ws.shell("ls /"))
+finally:
+    await runner.stop()
+```
+
+## The agent tool table
+
+`MirageToolOperations` is the seven agent tools (`shell`, `read`, `write`, `edit`, `ls`, `grep`, `glob`) as a class, answered for one session. MCP, RPC's `tools/call`, the HTTP tool routes and the CLI's tool verbs all call it, so an agent loop of your own gets the same answers:
+
+```python
+from mirage.agents.tool_operations import MirageToolOperations
+
+tools = MirageToolOperations(ws, session_id="agent")
+result = await tools.call("read", {"path": "/data/report.csv"})
+print(result.text, result.is_error)
+```
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `workspace` | | The workspace the tools act on. |
+| `stale_write_protection` | `True` | `False` lets `write` and `edit` overwrite a file that changed since it was read. |
+| `session_id` | `None` | The session the tools act as; `None` is the workspace's default session. |
+
+Each tool is also a method: `await tools.read("/data/report.csv", offset=0, limit=20)`, `await tools.grep("todo", "/src", ignore_case=True)`. `call` takes the arguments as the schema reads them, and is what every interface uses. `mirage.agents.tool_descriptions` holds each tool's description and JSON schema (`READ_DESCRIPTION`, `READ_INPUT`, ...) to hand your model, and the [agent adapters](/python/agents/index) wrap the table for each framework.
+
+## Embed the MCP server
+
+The MCP server the Mirage server runs is a class you can run yourself, over any MCP transport, without the Mirage server:
+
+```python
+from mcp.server.stdio import stdio_server
+
+from mirage.server.mcp import MirageMcpServer
+
+
+async def serve(ws: Workspace) -> None:
+    server = MirageMcpServer(ws, session_id="agent").server
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream, write_stream, server.create_initialization_options()
+        )
+```
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `workspace` | | The workspace to serve. |
+| `stale_write_protection` | `True` | `False` lets `write` and `edit` overwrite a file that changed since it was read. |
+| `name` | `"mirage"` | The server name advertised to the client. |
+| `version` | the package version | The server version advertised to the client. |
+| `session_id` | `None` | The session the tools act as; `None` is the default session. |
+| `operations` | `None` | A [`MirageToolOperations`](#the-agent-tool-table) to serve instead of building one. |
+
+`server` is the SDK's low-level `Server`, so it also mounts behind `StreamableHTTPSessionManager` in your own ASGI app. `mirage.server.mcp.server.TOOLS` is the tool list it advertises.
+
+## Embed the RPC server
+
+`MirageRpcServer` serves one session over [JSON-RPC](/home/access/rpc), with the same methods the Mirage server answers. `handle` answers one message, for a route of your own; `serve` answers a newline-delimited stream until it ends, running each request as its own task so `$/cancelRequest` reaches a running one:
+
+```python
+import asyncio
+import sys
+
+from mirage.server.rpc import MirageRpcServer
+
+
+async def serve(ws: Workspace) -> None:
+    server = MirageRpcServer(ws, session_id="agent")
+    reader = asyncio.StreamReader()
+    loop = asyncio.get_running_loop()
+    await loop.connect_read_pipe(
+        lambda: asyncio.StreamReaderProtocol(reader), sys.stdin
+    )
+
+    async def read_line() -> str:
+        return (await reader.readline()).decode()
+
+    async def write_line(text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    await server.serve(read_line, write_line)
+```
+
+```python
+answer = await server.handle(
+    {"jsonrpc": "2.0", "id": 1, "method": "glob", "params": {"pattern": "/*"}}
+)
+```
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `workspace` | | The workspace to serve. |
+| `session_id` | `None` | The session the methods act as; `None` is the default session. |
+| `operations` | `None` | The tool table `tools/call` serves; one is built for the session when `None`. |
+| `name`, `version` | `"mirage"`, the package version | What `initialize` reports. |
+
+In-app, `shell` runs the line directly on the session; the Mirage server runs it as a job instead.
+
+## Reach a server from code
+
+When the workspace lives in a [server](/python/access/server), any HTTP client reaches it. The token is in `~/.mirage/auth_token` in the default local mode:
+
+```python
+from pathlib import Path
+
+import httpx
+
+token = (Path.home() / ".mirage" / "auth_token").read_text().strip()
+with httpx.Client(
+    base_url="http://127.0.0.1:8765",
+    headers={"Authorization": f"Bearer {token}"},
+) as client:
+    answer = client.post(
+        "/v1/workspaces/demo/rpc",
+        json={"jsonrpc": "2.0", "id": 1, "method": "vfs/read", "params": {"path": "/notes.txt"}},
+    ).json()
+```
+
+`POST /rpc` carries the whole Session API in one route; the [HTTP](/home/access/http) page lists the rest, and the [RPC](/home/access/rpc) page shows a `mirage rpc` client over stdio.

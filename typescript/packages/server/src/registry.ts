@@ -117,29 +117,25 @@ export class WorkspaceRegistry {
    * `closeAll` (daemon shutdown) keeps them. The id stays registered
    * until the deletion is done, so a create under it is refused rather
    * than registering a workspace whose state this deletion would then
-   * remove; `cleanup` runs inside that window. An overlapping remove of
+   * remove. An overlapping remove of
    * the same id joins the deletion in flight, so it never unregisters a
    * workspace created after it.
    */
-  async remove(id: string, cleanup?: () => Promise<void>): Promise<WorkspaceEntry> {
+  async remove(id: string): Promise<WorkspaceEntry> {
     let removal = this.removals.get(id)
     if (removal === undefined) {
       const entry = this.entries.get(id)
       if (entry === undefined) throw new Error(`workspace not found: ${id}`)
-      removal = this.drop(entry, cleanup)
+      removal = this.drop(entry)
       this.removals.set(id, removal)
     }
     return removal
   }
 
   /** Run one deletion, releasing the id once it is done. */
-  private async drop(
-    entry: WorkspaceEntry,
-    cleanup?: () => Promise<void>,
-  ): Promise<WorkspaceEntry> {
+  private async drop(entry: WorkspaceEntry): Promise<WorkspaceEntry> {
     try {
       await entry.runner.stop({ delete: true })
-      if (cleanup !== undefined) await cleanup()
     } finally {
       this.removals.delete(entry.id)
       this.entries.delete(entry.id)

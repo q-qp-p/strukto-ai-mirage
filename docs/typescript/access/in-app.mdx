@@ -1,0 +1,175 @@
+---
+title: In-app
+description: The core every interface reaches. A Workspace, Session handles that run lines and move bytes, the agent tool table, and the MCP and RPC servers to embed.
+icon: cube
+---
+
+The in-app API is what every other interface is built on: [HTTP](/home/access/http), [MCP](/home/access/mcp), [RPC](/home/access/rpc), [SSH](/home/access/ssh) and the [CLI](/home/access/cli) all end in the calls on this page. Use it directly when your agent runs in the same process as the workspace.
+
+## Workspace and Session
+
+A `Session` is one session's handle: `shell` runs a line as it, `glob` matches as it, and `vfs` is the file API run as it, so every call answers under the session's [profile](/home/permissions), with its working directory, environment, mount modes and hides.
+
+```ts
+import { MountMode, RAMVFS, Workspace } from '@struktoai/mirage-node'
+
+const ws = new Workspace({ '/': new RAMVFS() }, { mode: MountMode.WRITE })
+const session = await ws.session('agent')
+
+const result = await session.shell('echo hello > /notes.txt && wc -c /notes.txt')
+console.log(result.exitCode, result.stdoutText)
+
+console.log(await session.glob('/**/*.txt'))
+console.log(new TextDecoder().decode(await session.vfs.read('/notes.txt')))
+
+await ws.close()
+```
+
+`ws.session(id)` creates the session when the id is new and adopts it when it exists. Pass `{ profile }` to create it under one of the workspace's [profiles](/home/permissions), or `{ mounts }` to narrow its mount modes. A profile, mounts or permissions for an existing session throw, since a profile is set once, when the session is created. `ws.shell(line, { sessionId })` and `ws.glob(pattern, sessionId)` are the same calls without the handle; without a session id they act as the workspace's default session.
+
+### session.shell
+
+```ts
+const result = await session.shell('grep -c ERROR /data/app.log', {
+  stdin: undefined,
+  cwd: undefined,
+  env: undefined,
+  signal: undefined,
+})
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `stdin` | | The line's stdin: a `Uint8Array`, or an async iterable of `Uint8Array` chunks to stream it. |
+| `cwd` | | A working directory for this line only. The line runs in a copy of the session, so a `cd` in it does not leak. |
+| `env` | | Variables for this line only, in the same copy. |
+| `signal` | | An `AbortSignal`; aborting it aborts the line. |
+| `agentId` | | Who ran it, for history and observability. |
+| `record` | `true` | `false` keeps the line out of history. |
+| `runtime` | | A workspace runtime entry to run the line's captured stages on. |
+
+It answers a result with `exitCode`, `stdoutText` and `stderrText` (`stdout` and `stderr` are the bytes). A non-zero exit is a result, not an exception.
+
+### Cancel a line
+
+Abort the signal. The line stops at its next await, `$?` goes back to what it was before the line ran, and the call throws a `DOMException` named `AbortError`:
+
+```ts
+const stop = new AbortController()
+const line = session.shell('sleep 30', { signal: stop.signal })
+setTimeout(() => stop.abort(), 1000)
+try {
+  await line
+} catch (err) {
+  if ((err as Error).name === 'AbortError') console.log('cancelled')
+}
+```
+
+A long synchronous step, such as one large read, finishes before the abort lands. A command that runs past its [limit](/home/yaml#command-limits) is not a cancel: it exits `124`.
+
+### session.vfs
+
+The file API, run as the session. Paths are absolute workspace paths, and bytes are `Uint8Array`.
+
+| Call | Answers |
+| --- | --- |
+| `await vfs.read(path, { offset, size })` | The bytes, whole or a range. |
+| `await vfs.write(path, data)` / `await vfs.append(path, data)` | Nothing. |
+| `await vfs.stat(path, undefined, { nofollow })` | A `FileStat`: `name`, `type`, `size`, `modified`, `mode`, ... |
+| `await vfs.readdir(path)` | The full path of each entry. |
+| `await vfs.exists(path)` | `true` or `false`. |
+| `await vfs.mkdir(path)`, `rmdir`, `unlink` | Nothing. |
+| `await vfs.rename(src, dst)` | Nothing. |
+| `await vfs.truncate(path, length)` | Nothing. |
+
+A failure throws an `Error` whose `code` is the POSIX name, as Node's `fs` does: `ENOENT` for a missing path, `EROFS` or `EACCES` for a refused one.
+
+## The agent tool table
+
+`MirageToolOperations` is the seven agent tools (`shell`, `read`, `write`, `edit`, `ls`, `grep`, `glob`) as a class, answered for one session. MCP, RPC's `tools/call`, the HTTP tool routes and the CLI's tool verbs all call it, so an agent loop of your own gets the same answers:
+
+```ts
+import { MirageToolOperations } from '@struktoai/mirage-agents/tool_operations'
+
+const tools = new MirageToolOperations(ws, { sessionId: 'agent' })
+const result = await tools.call('read', { path: '/data/report.csv' })
+console.log(result.content[0]?.text, result.isError === true)
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `staleWriteProtection` | `true` | `false` lets `write` and `edit` overwrite a file that changed since it was read. |
+| `sessionId` | the default session | The session the tools act as. |
+
+Each tool is also a method: `await tools.read('/data/report.csv', 0, 20)`, `await tools.grep('todo', '/src', { ignoreCase: true })`. `call` takes the arguments as the schema reads them, is what every interface uses, and throws for a name no tool has. `readMedia(path)` answers an image or a PDF as media instead of numbered text, for adapters that hand media to the model. `@struktoai/mirage-agents/tool_descriptions` exports each tool's description and JSON schema (`READ_DESCRIPTION`, `READ_INPUT`, ...) to hand your model, and the [agent adapters](/typescript/agents/index) wrap the table for each framework.
+
+## Embed the MCP server
+
+The MCP server the Mirage server runs is a factory you can call yourself, over any MCP transport, without the Mirage server:
+
+```ts
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio'
+import { createMirageMcpServer } from '@struktoai/mirage-server/mcp'
+
+const server = createMirageMcpServer(ws, { sessionId: 'agent' })
+await server.connect(new StdioServerTransport())
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `name` | `"mirage"` | The server name advertised to the client. |
+| `version` | the package version | The server version advertised to the client. |
+| `staleWriteProtection` | `true` | `false` lets `write` and `edit` overwrite a file that changed since it was read. |
+| `sessionId` | the default session | The session the tools act as. |
+| `operations` | | A [`MirageToolOperations`](#the-agent-tool-table) to serve instead of building one. |
+
+It returns the SDK's `McpServer`. To serve it over streamable HTTP from your own route, hand the factory to the SDK's `createMcpHandler(() => createMirageMcpServer(ws, { operations }))`, sharing one `operations` across requests so stale-write stamps carry from one request to the next, which is what the Mirage server does.
+
+## Embed the RPC server
+
+`MirageRpcServer` serves one session over [JSON-RPC](/home/access/rpc), with the same methods the Mirage server answers. `handle` answers one message, for a route of your own; `serve` answers a stream of lines until it ends, running each request on its own so `$/cancelRequest` reaches a running one:
+
+```ts
+import { createInterface } from 'node:readline'
+import { MirageRpcServer } from '@struktoai/mirage-server/rpc'
+
+const server = new MirageRpcServer(ws, { sessionId: 'agent' })
+await server.serve(createInterface({ input: process.stdin }), (text) => process.stdout.write(text))
+```
+
+```ts
+const answer = await server.handle({
+  jsonrpc: '2.0',
+  id: 1,
+  method: 'glob',
+  params: { pattern: '/*' },
+})
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `sessionId` | the default session | The session the methods act as. |
+| `operations` | | The tool table `tools/call` serves; one is built for the session when absent. |
+| `name`, `version` | `"mirage"`, the package version | What `initialize` reports. |
+
+In-app, `shell` runs the line directly on the session; the Mirage server runs it as a job instead.
+
+## Reach a server from code
+
+When the workspace lives in a [server](/typescript/access/server), `fetch` reaches it. The token is in `~/.mirage/auth_token` in the default local mode:
+
+```ts
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+
+const token = readFileSync(join(homedir(), '.mirage', 'auth_token'), 'utf8').trim()
+const response = await fetch('http://127.0.0.1:8765/v1/workspaces/demo/rpc', {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'vfs/read', params: { path: '/notes.txt' } }),
+})
+const answer = await response.json()
+```
+
+`POST /rpc` carries the whole Session API in one route; the [HTTP](/home/access/http) page lists the rest, and the [RPC](/home/access/rpc) page shows a `mirage rpc` client over stdio.

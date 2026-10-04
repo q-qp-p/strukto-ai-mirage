@@ -81,6 +81,10 @@
       "types": "./dist/mcp/index.d.ts",
       "import": "./dist/mcp/index.js"
     },
+    "./rpc": {
+      "types": "./dist/rpc/index.d.ts",
+      "import": "./dist/rpc/index.js"
+    },
     "./package.json": "./package.json",
     "./bin/daemon": "./dist/bin/daemon.js"
   },
@@ -96,7 +100,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@fastify/multipart": "^10.0.0",
     "@fastify/rate-limit": "^10.0.0",
     "@modelcontextprotocol/client": "^2.3.0",
     "@modelcontextprotocol/server": "^2.3.0",
@@ -104,7 +107,6 @@
     "@struktoai/mirage-core": "workspace:*",
     "@struktoai/mirage-node": "workspace:*",
     "fastify": "^5.12.5",
-    "isomorphic-git": "^1.38.1",
     "jose": "^6.2.3",
     "rate-limiter-flexible": "^11.2.0"
   },

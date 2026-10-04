@@ -40,11 +40,11 @@ async def health(request: Request) -> HealthResponse:
 
 @router.post("/v1/shutdown", response_model=ShutdownResponse)
 async def shutdown(request: Request) -> ShutdownResponse:
-    """Trip the exit event so the daemon shuts down gracefully.
+    """Trip the exit event, which the app's ``on_idle_exit`` acts on.
 
-    The ``_watch_exit`` background task in the lifespan picks this up
-    and sends SIGTERM to the process. uvicorn handles the rest of the
-    shutdown sequence (close connections, run lifespan finally block).
+    The daemon's hook sends SIGTERM to its own process, so uvicorn runs
+    its graceful shutdown (close connections, run the lifespan's finally
+    block). An app run without a hook keeps serving.
     """
     request.app.state.exit_event.set()
     return ShutdownResponse(status="shutting_down", pid=os.getpid())

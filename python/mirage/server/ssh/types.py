@@ -15,7 +15,6 @@
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
-from mirage.server.mcp.http import McpDoor
 from mirage.server.registry import WorkspaceRegistry
 from mirage.server.ssh.config import SSHConfig
 
@@ -30,6 +29,4 @@ class SSHListener(Protocol):
     async def wait_closed(self) -> None: ...
 
 
-StartSSH = Callable[
-    [WorkspaceRegistry, SSHConfig, McpDoor], Awaitable[SSHListener]
-]
+StartSSH = Callable[[WorkspaceRegistry, SSHConfig], Awaitable[SSHListener]]

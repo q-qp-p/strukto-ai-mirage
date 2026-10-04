@@ -35,7 +35,6 @@ export const PROFILE_OPTION = 'mirage-profile'
  * message per line, without the `jsonrpc` member.
  */
 export const CODEX_SUBSYSTEM = 'codex-exec'
-export const MCP_SUBSYSTEM = 'mcp'
 export const CODEX_AGENT_ID = 'codex'
 export const CODEX_SHELL_NAME = 'bash'
 export const CODEX_SHELL_PATH = '/bin/bash'
@@ -60,13 +59,6 @@ export const CODEX_CTRL_D = 0x04
  */
 export const CODEX_INTERRUPTED = 130
 export const CODEX_TERMINATED = -1
-
-export const RPC_PARSE_ERROR = -32700
-export const RPC_INVALID_REQUEST = -32600
-export const RPC_METHOD_NOT_FOUND = -32601
-export const RPC_INVALID_PARAMS = -32602
-export const RPC_INTERNAL_ERROR = -32603
-export const RPC_NOT_FOUND = -32004
 
 export const SSH_ENV_KEYS = {
   ssh_port: ENV_SSH_PORT,

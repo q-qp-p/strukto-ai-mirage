@@ -33,9 +33,8 @@ class McpRelay:
     """Answers MCP over one stream by asking the daemon's HTTP endpoint.
 
     Every way into mirage's MCP tools ends at the daemon's
-    ``/v1/workspaces/{id}/mcp``: the stdio CLI and the SSH subsystem only
-    carry messages to it, so auth, sessions, jobs and history are decided
-    in one place.
+    ``/v1/workspaces/{id}/mcp``: the stdio CLI only carries messages to
+    it, so auth, sessions, jobs and history are decided in one place.
 
     Args:
         upstream (Client): an MCP client connected to the endpoint.
@@ -95,10 +94,13 @@ async def relay_stdio(url: str, headers: dict[str, str]) -> None:
     Args:
         url (str): the workspace's ``/v1/workspaces/{id}/mcp`` URL.
         headers (dict[str, str]): request headers, the bearer token among
-            them.
+            them. A tool call may run for as long as its command does, so
+            reads are not timed.
     """
     async with (
-        httpx2.AsyncClient(headers=headers) as http,
+        httpx2.AsyncClient(
+            headers=headers, timeout=httpx2.Timeout(30.0, read=None)
+        ) as http,
         Client(streamable_http_client(url, http_client=http)) as upstream,
         stdio_server() as (read_stream, write_stream),
     ):

@@ -35,7 +35,6 @@ from mirage.cache.file.mixin import FileCacheMixin
 from mirage.cache.index import IndexConfig
 from mirage.commands.cli import CLISpec
 from mirage.commands.cli.specs import cli_spec_for
-from mirage.concurrency.limiter import run_blocking
 from mirage.context import (
     get_current_session_for,
     get_current_session_unless_foreign,
@@ -101,6 +100,7 @@ from mirage.utils.ids import new_session_id, new_workspace_id
 from mirage.vfs.base import BaseVFS
 from mirage.vfs.bin import BinViewVFS
 from mirage.vfs.history import HISTORY_PREFIX, HistoryViewVFS
+from mirage.vfs.s3.config import S3Config
 from mirage.workspace.abort import MirageAbortError, run_cancellable
 from mirage.workspace.cli import CLIInstall
 from mirage.workspace.dispatcher import Dispatcher
@@ -134,7 +134,7 @@ from mirage.workspace.snapshot import (
     apply_state_dict,
     build_mount_args,
     install_fingerprints,
-    read_tar,
+    read_snapshot,
     to_state_dict,
 )
 from mirage.workspace.snapshot import snapshot as _write_snapshot
@@ -1150,7 +1150,13 @@ class Workspace:
 
     # ── snapshot / load / copy ─────────────────────────────────────────────
 
-    async def snapshot(self, target, *, compress: str | None = None) -> None:
+    async def snapshot(
+        self,
+        target,
+        *,
+        compress: str | None = None,
+        s3: S3Config | None = None,
+    ) -> int:
         """Serialize this workspace to a tar.
 
         Captured:
@@ -1174,10 +1180,15 @@ class Workspace:
         ``supports_snapshot`` mount.
 
         Args:
-            target: filesystem path OR a writable file-like object.
+            target: filesystem path OR a writable file-like object; with
+                ``s3``, the object key.
             compress: None | "gz" | "bz2" | "xz".
+            s3 (S3Config | None): an S3-like store to put the tar in.
+
+        Returns:
+            int: the tar's size in bytes.
         """
-        await _write_snapshot(self, target, compress=compress)
+        return await _write_snapshot(self, target, compress=compress, s3=s3)
 
     @classmethod
     async def load(
@@ -1188,6 +1199,7 @@ class Workspace:
         clis: CLIOverrides | None = None,
         secrets: Mapping[str, SecretSource | Mapping[str, Any]] | None = None,
         drift_policy: DriftPolicy = DriftPolicy.STRICT,
+        s3: S3Config | None = None,
     ) -> "Workspace":
         """Reconstruct a Workspace from a tar.
 
@@ -1210,7 +1222,8 @@ class Workspace:
         execute), so downstream code can rely on consistent state.
 
         Args:
-            source: filesystem path OR a readable file-like object.
+            source: filesystem path OR a readable file-like object; with
+                ``s3``, the object key.
             mounts: {prefix: VFS} overrides for mounts saved
                 with redacted creds.
             clis: {name: config} overrides for CLIs saved with
@@ -1227,9 +1240,10 @@ class Workspace:
                 cache entries for fingerprinted paths; a Redis cache is
                 never restored from a snapshot, so it has nothing to
                 drop.
+            s3 (S3Config | None): the S3-like store the tar is in.
         """
         return await cls.from_state(
-            await run_blocking(read_tar, source),
+            await read_snapshot(source, s3=s3),
             mounts=mounts,
             clis=clis,
             secrets=secrets,

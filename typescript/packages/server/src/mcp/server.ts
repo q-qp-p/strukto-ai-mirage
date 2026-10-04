@@ -14,7 +14,12 @@
 
 import { VERSION } from '@struktoai/mirage-core/version'
 import type { Workspace } from '@struktoai/mirage-core/workspace/workspace/workspace'
-import { fromJsonSchema, McpServer, type JsonSchemaType } from '@modelcontextprotocol/server'
+import {
+  fromJsonSchema,
+  McpServer,
+  type JsonSchemaType,
+  type ToolAnnotations,
+} from '@modelcontextprotocol/server'
 import {
   EDIT_DESCRIPTION,
   EDIT_INPUT,
@@ -36,6 +41,56 @@ import {
   type MirageToolOperationsOptions,
 } from '@struktoai/mirage-agents/tool_operations'
 
+const READ_ONLY: ToolAnnotations = { readOnlyHint: true }
+
+/** The tools every door serves, in the order a client lists them. */
+export const TOOLS: readonly {
+  name: string
+  description: string
+  inputSchema: JsonSchemaType
+  annotations?: ToolAnnotations
+}[] = [
+  {
+    name: 'shell',
+    description: SHELL_DESCRIPTION,
+    inputSchema: SHELL_INPUT as JsonSchemaType,
+  },
+  {
+    name: 'read',
+    description: READ_DESCRIPTION,
+    annotations: READ_ONLY,
+    inputSchema: READ_INPUT as JsonSchemaType,
+  },
+  {
+    name: 'write',
+    description: WRITE_DESCRIPTION,
+    inputSchema: WRITE_INPUT as JsonSchemaType,
+  },
+  {
+    name: 'edit',
+    description: EDIT_DESCRIPTION,
+    inputSchema: EDIT_INPUT as JsonSchemaType,
+  },
+  {
+    name: 'ls',
+    description: LS_DESCRIPTION,
+    annotations: READ_ONLY,
+    inputSchema: LS_INPUT as JsonSchemaType,
+  },
+  {
+    name: 'grep',
+    description: GREP_DESCRIPTION,
+    annotations: READ_ONLY,
+    inputSchema: GREP_INPUT as JsonSchemaType,
+  },
+  {
+    name: 'glob',
+    description: GLOB_DESCRIPTION,
+    annotations: READ_ONLY,
+    inputSchema: GLOB_INPUT as JsonSchemaType,
+  },
+]
+
 export interface MirageMcpServerOptions extends MirageToolOperationsOptions {
   name?: string
   version?: string
@@ -56,84 +111,16 @@ export function createMirageMcpServer(
     name: options.name ?? 'mirage',
     version: options.version ?? VERSION,
   })
-
-  server.registerTool(
-    'shell',
-    {
-      description: SHELL_DESCRIPTION,
-      inputSchema: fromJsonSchema<{ command: string }>(SHELL_INPUT as JsonSchemaType),
-    },
-    (args) => operations.call('shell', args),
-  )
-  server.registerTool(
-    'read',
-    {
-      description: READ_DESCRIPTION,
-      inputSchema: fromJsonSchema<{ path: string; offset?: number; limit?: number }>(
-        READ_INPUT as JsonSchemaType,
-      ),
-      annotations: { readOnlyHint: true },
-    },
-    (args) => operations.call('read', args),
-  )
-  server.registerTool(
-    'write',
-    {
-      description: WRITE_DESCRIPTION,
-      inputSchema: fromJsonSchema<{ path: string; content: string }>(WRITE_INPUT as JsonSchemaType),
-    },
-    (args) => operations.call('write', args),
-  )
-  server.registerTool(
-    'edit',
-    {
-      description: EDIT_DESCRIPTION,
-      inputSchema: fromJsonSchema<{
-        path: string
-        old_string: string
-        new_string: string
-        replace_all?: boolean
-      }>(EDIT_INPUT as JsonSchemaType),
-    },
-    (args) => operations.call('edit', args),
-  )
-  server.registerTool(
-    'ls',
-    {
-      description: LS_DESCRIPTION,
-      inputSchema: fromJsonSchema<{ path: string }>(LS_INPUT as JsonSchemaType),
-      annotations: { readOnlyHint: true },
-    },
-    (args) => operations.call('ls', args),
-  )
-  server.registerTool(
-    'grep',
-    {
-      description: GREP_DESCRIPTION,
-      inputSchema: fromJsonSchema<{
-        pattern: string
-        path: string
-        ignore_case?: boolean
-        fixed_strings?: boolean
-        include?: string
-        context?: number
-        files_with_matches?: boolean
-        count?: boolean
-        max_count?: number
-      }>(GREP_INPUT as JsonSchemaType),
-      annotations: { readOnlyHint: true },
-    },
-    (args) => operations.call('grep', args),
-  )
-  server.registerTool(
-    'glob',
-    {
-      description: GLOB_DESCRIPTION,
-      inputSchema: fromJsonSchema<{ pattern: string; path?: string }>(GLOB_INPUT as JsonSchemaType),
-      annotations: { readOnlyHint: true },
-    },
-    (args) => operations.call('glob', args),
-  )
-
+  for (const tool of TOOLS) {
+    server.registerTool(
+      tool.name,
+      {
+        description: tool.description,
+        inputSchema: fromJsonSchema<Record<string, unknown>>(tool.inputSchema),
+        ...(tool.annotations === undefined ? {} : { annotations: tool.annotations }),
+      },
+      (args, ctx) => operations.call(tool.name, args, ctx.mcpReq.signal),
+    )
+  }
   return server
 }

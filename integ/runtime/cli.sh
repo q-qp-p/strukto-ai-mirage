@@ -87,8 +87,10 @@ RUNTIMES='{
 # without `runtimes` is printed as it is), as run.py `_for_runtime` builds
 # them: a step's `program`, `script` or `command` map picks the runtime's
 # language (a step without it is left out), `expect_on` keyed by the
-# runtime, then by `runtime@host`, is merged over `expect`, and the world
-# runs the runtime's table entry with the case's `entry` laid over it.
+# runtime, then by `runtime@host`, then by `ram` and `runtime@ram` (every
+# mount here is RAM: this is a case's ram variant), is merged over `expect`,
+# and the world runs the runtime's table entry with the case's `entry` laid
+# over it.
 # INTEG_RUNTIMES (comma separated) keeps only the runtimes it names.
 runtime_variants() {
   local case_json="$1" host="$2"
@@ -115,7 +117,9 @@ runtime_variants() {
               | . + {command: .command[$lang], guest: true}
             else . end
           | .expect = ((.expect // {}) + ((.expect_on // {})[$r] // {})
-              + ((.expect_on // {})[$r + "@" + $h] // {}))
+              + ((.expect_on // {})[$r + "@" + $h] // {})
+              + ((.expect_on // {}).ram // {})
+              + ((.expect_on // {})[$r + "@ram"] // {}))
         ] as $steps
       | select($lang == null or any($steps[]; .guest))
       | (if $base == {} and $over == {} then $r

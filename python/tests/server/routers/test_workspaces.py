@@ -13,12 +13,16 @@
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import asyncio
+import json
 import os
 import time
 import uuid
+from collections.abc import Iterator
 
+import boto3
 import pytest
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
+from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
 from mirage import Workspace
@@ -26,7 +30,10 @@ from mirage.secrets.errors import SecretsError
 from mirage.secrets.registry import register_secrets
 from mirage.secrets.types import ResolvedSecret
 from mirage.server import build_app
+from mirage.server.env import ENV_HOME
 from mirage.server.registry import WorkspaceRegistry
+from mirage.server.routers import workspaces as workspaces_router
+from mirage.vfs.s3.config import S3Config
 
 
 class HeldSourceConfig(BaseModel):
@@ -82,13 +89,9 @@ async def _shell(ws, line: str) -> tuple[int, str]:
     return result.exit_code, await result.stdout_str()
 
 
-def _make_app_with_short_grace(grace: float = 0.2, snapshot_root=None):
+def _make_app_with_short_grace(grace: float = 0.2):
     exit_event = asyncio.Event()
-    app = build_app(
-        idle_grace_seconds=grace,
-        exit_event=exit_event,
-        snapshot_root=snapshot_root,
-    )
+    app = build_app(idle_grace_seconds=grace, exit_event=exit_event)
     return app, exit_event
 
 
@@ -129,14 +132,13 @@ async def test_create_list_get_delete_round_trip():
 @pytest.mark.asyncio
 async def test_delete_drops_the_workspace_state(tmp_path):
     # Deleting a workspace deletes everything it kept, so one created
-    # again under the same id finds no link, no history, no version and
-    # no state on disk from the first.
-    state, versions = tmp_path / "state", tmp_path / "versions"
+    # again under the same id finds no link, no history and no state on
+    # disk from the first.
+    state = tmp_path / "state"
     app = build_app(
         idle_grace_seconds=10.0,
         exit_event=asyncio.Event(),
         state_root=state,
-        version_root=versions,
     )
     body = {**_minimal_config(), "id": "again"}
     async with AsyncClient(
@@ -150,20 +152,9 @@ async def test_delete_drops_the_workspace_state(tmp_path):
             _shell(runner.ws, "ln -s /data /alias && echo secret-token")
         )
         assert code == 0
-        r = await client.post(
-            "/v1/workspaces/again/commit", json={"message": "first"}
-        )
-        assert r.status_code == 200, r.text
         assert (state / "workspaces" / "again").is_dir()
-        assert (versions / "again").is_dir()
         assert (await client.delete("/v1/workspaces/again")).status_code == 200
         assert not (state / "workspaces" / "again").exists()
-        assert not (versions / "again").exists()
-        # Reading the versions of a deleted workspace finds none, and
-        # does not recreate the repo its delete removed.
-        r = await client.get("/v1/workspaces/again/versions")
-        assert r.status_code == 200 and r.json() == []
-        assert not (versions / "again").exists()
         assert (
             await client.post("/v1/workspaces", json=body)
         ).status_code == 201
@@ -198,7 +189,7 @@ async def test_a_dot_id_is_refused_before_it_can_name_the_state_root(
             r = await client.post("/v1/workspaces", json=body)
             assert r.status_code == 400, r.text
             r = await client.post(
-                "/v1/workspaces/load", json={"path": "missing.tar", "id": wid}
+                "/v1/workspaces/load", json={"key": "missing.tar", "id": wid}
             )
             assert "invalid workspace id" in r.json()["detail"], r.text
 
@@ -359,16 +350,19 @@ async def test_create_refuses_an_id_whose_deletion_is_in_flight():
     body = {"config": {**_minimal_config()["config"], "workspace_id": "going"}}
     release = asyncio.Event()
 
-    async def cleanup() -> None:
-        await release.wait()
-
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         first = await client.post("/v1/workspaces", json=body)
-        removal = asyncio.create_task(
-            app.state.registry.remove("going", cleanup)
-        )
+        runner = app.state.registry.get("going").runner
+        stop = runner.stop
+
+        async def held_stop(*, delete: bool = False) -> None:
+            await release.wait()
+            await stop(delete=delete)
+
+        runner.stop = held_stop
+        removal = asyncio.create_task(app.state.registry.remove("going"))
         await asyncio.sleep(0)
         during = await client.post("/v1/workspaces", json=body)
         release.set()
@@ -493,80 +487,163 @@ async def test_health_endpoint():
         assert r.json()["workspaces"] == 1
 
 
-@pytest.mark.asyncio
-async def test_snapshot_writes_tar_to_path(tmp_path):
-    app, _ = _make_app_with_short_grace(grace=10.0, snapshot_root=tmp_path)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport, base_url="http://test"
-    ) as client:
-        r = await client.post("/v1/workspaces", json=_minimal_config())
-        wid = r.json()["id"]
-        target = tmp_path / "snap.tar"
-        r = await client.post(
-            f"/v1/workspaces/{wid}/snapshot", json={"path": str(target)}
-        )
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["path"] == str(target)
-        assert body["size"] > 0
-        assert target.exists()
-        assert target.stat().st_size == body["size"]
+async def _download(client: AsyncClient, wid: str) -> bytes:
+    r = await client.get(f"/v1/workspaces/{wid}/snapshot")
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"] == "application/x-tar"
+    return r.content
+
+
+async def _upload(
+    client: AsyncClient, tar: bytes, request: dict | None = None
+) -> Response:
+    return await client.post(
+        "/v1/workspaces/load",
+        files={
+            "request": (
+                "request.json",
+                json.dumps(request or {}),
+                "application/json",
+            ),
+            "snapshot": ("snap.tar", tar, "application/x-tar"),
+        },
+    )
+
+
+@pytest.fixture()
+def snapshot_store() -> Iterator[S3Config]:
+    server = ThreadedMotoServer(ip_address="127.0.0.1", port=0, verbose=False)
+    server.start()
+    host, port = server.get_host_and_port()
+    endpoint = f"http://{host}:{port}"
+    boto3.client(
+        "s3",
+        endpoint_url=endpoint,
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        region_name="us-east-1",
+    ).create_bucket(Bucket="snaps")
+    yield S3Config(
+        bucket="snaps",
+        region="us-east-1",
+        endpoint_url=endpoint,
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        path_style=True,
+        key_prefix="team/",
+    )
+    server.stop()
 
 
 @pytest.mark.asyncio
-async def test_snapshot_load_round_trip(tmp_path):
-    app, _ = _make_app_with_short_grace(grace=10.0, snapshot_root=tmp_path)
-    transport = ASGITransport(app=app)
+async def test_snapshot_answers_the_tar_and_writes_nothing(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(ENV_HOME, str(tmp_path))
+    app, _ = _make_app_with_short_grace(grace=10.0)
     async with AsyncClient(
-        transport=transport, base_url="http://test"
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await client.post("/v1/workspaces", json=_minimal_config())
+        tar = await _download(client, r.json()["id"])
+    assert tar[257:262] == b"ustar"
+    assert not (tmp_path / "snapshots").exists()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_upload_round_trip():
+    app, _ = _make_app_with_short_grace(grace=10.0)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         r = await client.post("/v1/workspaces", json=_minimal_config())
         wid = r.json()["id"]
-        target = tmp_path / "snap.tar"
         await client.post(
-            f"/v1/workspaces/{wid}/snapshot", json={"path": str(target)}
+            f"/v1/workspaces/{wid}/shell", json={"command": "echo hi > /f"}
         )
-
-        r = await client.post(
-            "/v1/workspaces/load", json={"path": str(target)}
-        )
+        r = await _upload(client, await _download(client, wid))
         assert r.status_code == 201, r.text
         new_id = r.json()["id"]
         assert new_id != wid
-
-        r = await client.get(f"/v1/workspaces/{new_id}")
-        assert r.status_code == 200
-        assert {m["prefix"] for m in r.json()["mounts"]} == {"/"}
+        r = await client.post(
+            f"/v1/workspaces/{new_id}/shell", json={"command": "cat /f"}
+        )
+        assert r.json()["stdout"] == "hi\n"
 
 
 @pytest.mark.asyncio
-async def test_snapshot_rejects_path_outside_root(tmp_path):
-    app, _ = _make_app_with_short_grace(grace=10.0, snapshot_root=tmp_path)
-    transport = ASGITransport(app=app)
+async def test_snapshot_store_round_trip(snapshot_store):
+    app = build_app(idle_grace_seconds=10.0, snapshot_store=snapshot_store)
     async with AsyncClient(
-        transport=transport, base_url="http://test"
+        transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         r = await client.post("/v1/workspaces", json=_minimal_config())
         wid = r.json()["id"]
         r = await client.post(
-            f"/v1/workspaces/{wid}/snapshot", json={"path": "../escape.tar"}
+            f"/v1/workspaces/{wid}/snapshot", json={"key": "a.tar"}
         )
+        assert r.status_code == 200, r.text
+        assert r.json()["key"] == "a.tar" and r.json()["size"] > 0
+        r = await client.post(
+            "/v1/workspaces/load", json={"key": "a.tar", "id": "back"}
+        )
+        assert r.status_code == 201, r.text
+        r = await client.post("/v1/workspaces/load", json={"key": "nope.tar"})
         assert r.status_code == 400, r.text
-        assert not (tmp_path.parent / "escape.tar").exists()
+        assert r.json()["detail"] == "snapshot not found: nope.tar"
+    keys = boto3.client(
+        "s3",
+        endpoint_url=snapshot_store.endpoint_url,
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+        region_name="us-east-1",
+    ).list_objects_v2(Bucket="snaps")["Contents"]
+    assert [k["Key"] for k in keys] == ["team/a.tar"]
 
 
 @pytest.mark.asyncio
-async def test_load_missing_path_returns_400(tmp_path):
-    app, _ = _make_app_with_short_grace(grace=10.0, snapshot_root=tmp_path)
-    transport = ASGITransport(app=app)
+async def test_a_key_needs_a_snapshot_store():
+    app, _ = _make_app_with_short_grace(grace=10.0)
     async with AsyncClient(
-        transport=transport, base_url="http://test"
+        transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        r = await client.post(
-            "/v1/workspaces/load", json={"path": str(tmp_path / "nope.tar")}
-        )
+        r = await client.post("/v1/workspaces", json=_minimal_config())
+        wid = r.json()["id"]
+        for r in (
+            await client.post(
+                f"/v1/workspaces/{wid}/snapshot", json={"key": "a.tar"}
+            ),
+            await client.post("/v1/workspaces/load", json={"key": "a.tar"}),
+        ):
+            assert r.status_code == 400, r.text
+            assert r.json()["detail"] == "this server has no snapshot store"
+
+
+@pytest.mark.asyncio
+async def test_load_needs_one_source():
+    app, _ = _make_app_with_short_grace(grace=10.0)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await client.post("/v1/workspaces/load", json={})
         assert r.status_code == 400, r.text
+        r = await _upload(client, b"", {"key": "a.tar"})
+        assert r.status_code == 400, r.text
+        assert "not both" in r.json()["detail"]
+        r = await _upload(client, b"not a tar")
+        assert r.status_code == 400, r.text
+
+
+@pytest.mark.asyncio
+async def test_load_refuses_a_snapshot_over_the_limit(monkeypatch):
+    monkeypatch.setattr(workspaces_router, "MAX_SNAPSHOT_PART", 8)
+    app, _ = _make_app_with_short_grace(grace=10.0)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await _upload(client, b"x" * 9)
+    assert r.status_code == 413, r.text
+    assert r.json()["detail"] == "snapshot part too large"
 
 
 @pytest.mark.asyncio
@@ -862,25 +939,14 @@ async def test_load_with_a_non_mapping_secrets_override_is_a_bad_request(
 ):
     """Filtering it to None here turned a bad override into a
     successful load whose every restored pointer was unresolvable."""
-    app, _ = _make_app_with_short_grace(grace=10.0, snapshot_root=tmp_path)
+    app, _ = _make_app_with_short_grace(grace=10.0)
     transport = ASGITransport(app=app)
     async with AsyncClient(
         transport=transport, base_url="http://test"
     ) as client:
         r = await client.post("/v1/workspaces", json=_minimal_config())
-        wid = r.json()["id"]
-        target = tmp_path / "snap.tar"
-        r = await client.post(
-            f"/v1/workspaces/{wid}/snapshot", json={"path": str(target)}
-        )
-        assert r.status_code == 200, r.text
-        r = await client.post(
-            "/v1/workspaces/load",
-            json={
-                "path": str(target),
-                "override": {"secrets": []},
-            },
-        )
+        tar = await _download(client, r.json()["id"])
+        r = await _upload(client, tar, {"override": {"secrets": []}})
         assert r.status_code == 400, r.text
 
 
@@ -890,25 +956,20 @@ async def test_load_with_an_unbuildable_vfs_override_is_a_bad_request(
 ):
     """A ref the daemon cannot load is the caller's mistake, so it is
     answered like the other bad overrides; it used to escape as a 500."""
-    app, _ = _make_app_with_short_grace(grace=10.0, snapshot_root=tmp_path)
+    app, _ = _make_app_with_short_grace(grace=10.0)
     transport = ASGITransport(app=app)
     async with AsyncClient(
         transport=transport, base_url="http://test"
     ) as client:
         r = await client.post("/v1/workspaces", json=_minimal_config())
-        wid = r.json()["id"]
-        target = tmp_path / "snap.tar"
-        r = await client.post(
-            f"/v1/workspaces/{wid}/snapshot", json={"path": str(target)}
-        )
-        assert r.status_code == 200, r.text
-        r = await client.post(
-            "/v1/workspaces/load",
-            json={
-                "path": str(target),
+        tar = await _download(client, r.json()["id"])
+        r = await _upload(
+            client,
+            tar,
+            {
                 "override": {
                     "mounts": {"/": {"vfs": f"{tmp_path}/gone.py:Wiki"}}
-                },
+                }
             },
         )
         assert r.status_code == 400, r.text

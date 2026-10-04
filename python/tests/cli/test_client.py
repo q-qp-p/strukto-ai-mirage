@@ -14,7 +14,7 @@
 
 import pytest
 
-from mirage.cli.client import DaemonClient
+from mirage.cli.client import DaemonClient, DaemonUnreachable
 from mirage.cli.settings import DaemonSettings
 from mirage.server.daemon_config import DaemonConfigError
 from mirage.server.env import ENV_HOME
@@ -115,3 +115,17 @@ def test_spawn_respects_config_auth_mode(tmp_path, monkeypatch):
     with DaemonClient(DaemonSettings()) as client:
         client._spawn_daemon()
     assert "MIRAGE_AUTH_MODE" not in spawned[0]["env"]
+
+
+def test_a_remote_url_is_never_spawned(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENV_HOME, str(tmp_path))
+    spawned = []
+    monkeypatch.setattr(
+        "mirage.cli.client.subprocess.Popen",
+        lambda *args, **kwargs: spawned.append(kwargs),
+    )
+    with DaemonClient(DaemonSettings(url="https://mirage.invalid")) as client:
+        with pytest.raises(DaemonUnreachable, match="mirage.invalid"):
+            client.ensure_running()
+    assert spawned == []
+    assert not (tmp_path / "auth_token").exists()

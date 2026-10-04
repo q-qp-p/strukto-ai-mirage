@@ -30,7 +30,7 @@ interface WsAskParams {
 }
 
 interface ListAsksQuery {
-  sessionId?: string
+  session_id?: string
   all?: string
 }
 
@@ -42,8 +42,8 @@ interface AnswerAskBody {
 
 interface AskResponse {
   id: string
-  sessionId: string
-  agentId: string
+  session_id: string
+  agent_id: string
   command: string
   argv: string[]
   cwd: string
@@ -57,8 +57,8 @@ interface AskResponse {
 function toResponse(record: Decision): AskResponse {
   return {
     id: record.id,
-    sessionId: record.sessionId,
-    agentId: record.agentId,
+    session_id: record.sessionId,
+    agent_id: record.agentId,
     command: record.command,
     argv: [...record.argv],
     cwd: record.cwd,
@@ -83,7 +83,7 @@ export function registerAsksRoutes(app: FastifyInstance, deps: AsksRoutesDeps): 
       }
       const ws = deps.registry.get(wsId).runner.ws
       await ws.ensureSessionsLoaded()
-      const sessionId = req.query.sessionId ?? ''
+      const sessionId = req.query.session_id ?? ''
       // The ledger reads a named session through SessionManager.get,
       // which throws for an unknown id; a mistyped filter is the
       // caller's error, answered in the sessions router's voice rather
