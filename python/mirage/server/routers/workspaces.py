@@ -13,7 +13,9 @@
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import hashlib
+import io
 import json
+import tarfile
 import time
 from typing import Any
 
@@ -27,7 +29,7 @@ from mirage.server.clone import (
     build_override_mounts,
     clone_workspace_with_override,
 )
-from mirage.server.paths import PathOutsideRootError, resolve_within_root
+from mirage.server.multipart import MAX_REQUEST_PART, PartEvent, part_events
 from mirage.server.schemas import (
     CloneWorkspaceRequest,
     CreateWorkspaceRequest,
@@ -40,6 +42,7 @@ from mirage.server.schemas import (
 )
 from mirage.server.summary import make_brief, make_detail
 from mirage.utils.ids import new_workspace_id
+from mirage.vfs.s3.config import S3Config
 from mirage.workspace.store import DiskWorkspaceStateStore
 from mirage.workspace.store.disk import DOT_IDS
 
@@ -191,12 +194,8 @@ async def delete_workspace(
     registry = request.app.state.registry
     if workspace_id not in registry:
         raise HTTPException(status_code=404, detail="workspace not found")
-    backend = request.app.state.version_backend
     try:
-        await registry.remove(
-            workspace_id,
-            cleanup=lambda: run_blocking(backend.drop_repo, workspace_id),
-        )
+        await registry.remove(workspace_id)
     except Exception as exc:
         raise HTTPException(
             status_code=500, detail=f"workspace delete failed: {exc}"
@@ -235,6 +234,17 @@ async def clone_workspace(
     return await make_detail(entry)
 
 
+@router.get("/{workspace_id}/snapshot")
+async def download_snapshot(workspace_id: str, request: Request) -> Response:
+    registry = request.app.state.registry
+    if workspace_id not in registry:
+        raise HTTPException(status_code=404, detail="workspace not found")
+    entry = registry.get(workspace_id)
+    buffer = io.BytesIO()
+    await entry.runner.call(entry.runner.ws.snapshot(buffer))
+    return Response(content=buffer.getvalue(), media_type="application/x-tar")
+
+
 @router.post(
     "/{workspace_id}/snapshot", response_model=SnapshotWorkspaceResponse
 )
@@ -244,37 +254,35 @@ async def snapshot_workspace(
     registry = request.app.state.registry
     if workspace_id not in registry:
         raise HTTPException(status_code=404, detail="workspace not found")
+    store = _snapshot_store(request)
     entry = registry.get(workspace_id)
-    try:
-        target = await run_blocking(
-            resolve_within_root, request.app.state.snapshot_root, req.path
-        )
-    except PathOutsideRootError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    await run_blocking(target.parent.mkdir, parents=True, exist_ok=True)
-    await entry.runner.call(entry.runner.ws.snapshot(str(target)))
-    info = await run_blocking(target.stat)
-    return SnapshotWorkspaceResponse(
-        id=workspace_id, path=str(target), size=info.st_size
-    )
+    size = await entry.runner.call(entry.runner.ws.snapshot(req.key, s3=store))
+    return SnapshotWorkspaceResponse(id=workspace_id, key=req.key, size=size)
 
 
 @router.post("/load", response_model=WorkspaceDetail, status_code=201)
-async def load_workspace(
-    req: LoadWorkspaceRequest, request: Request
-) -> WorkspaceDetail:
+async def load_workspace(request: Request) -> WorkspaceDetail:
     registry = request.app.state.registry
-    try:
-        safe_path = await run_blocking(
-            resolve_within_root, request.app.state.snapshot_root, req.path
-        )
-    except PathOutsideRootError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    content_type = request.headers.get("content-type", "")
+    tar: bytes | None = None
+    if content_type.startswith("multipart/"):
+        req, tar = await _read_load_body(request, content_type)
+    else:
+        req = _parse_load_request(await request.body())
+        if req.key is None:
+            raise HTTPException(
+                status_code=400,
+                detail="load needs a 'key' or an uploaded 'snapshot' part",
+            )
     _refuse_dot_id(req.id)
     if req.id is not None and req.id in registry:
         raise HTTPException(
             status_code=409, detail=f"workspace id already exists: {req.id!r}"
         )
+    store: S3Config | None = None
+    source: Any = io.BytesIO(tar) if tar is not None else req.key
+    if tar is None:
+        store = _snapshot_store(request)
     secrets = _build_load_secrets(req.override)
     try:
         # An override mount's credential may be a pointer at one of
@@ -292,22 +300,97 @@ async def load_workspace(
         )
     try:
         ws = await Workspace.load(
-            str(safe_path), mounts=mounts, secrets=secrets
+            source, mounts=mounts, secrets=secrets, s3=store
         )
     except FileNotFoundError:
         raise HTTPException(
-            status_code=400, detail=f"snapshot not found: {req.path}"
+            status_code=400, detail=f"snapshot not found: {req.key}"
         )
-    except (SecretsError, ValueError) as e:
+    except (SecretsError, ValueError, tarfile.TarError, KeyError) as e:
         # A secrets override naming an unknown source, or one whose
         # optional dependency is absent, is a bad request like any
-        # other override the deployment got wrong.
-        raise HTTPException(status_code=400, detail=str(e))
+        # other override the deployment got wrong; so is an upload
+        # that is not a snapshot.
+        raise HTTPException(status_code=400, detail=f"load failed: {e}")
     try:
         entry = registry.add(ws, workspace_id=req.id)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return await make_detail(entry)
+
+
+def _snapshot_store(request: Request) -> S3Config:
+    """The S3-like store the server was given for snapshots.
+
+    Args:
+        request (Request): the request, for the app's store.
+
+    Returns:
+        S3Config: the store.
+
+    Raises:
+        HTTPException: 400 when the server has none.
+    """
+    store: S3Config | None = request.app.state.snapshot_store
+    if store is None:
+        raise HTTPException(
+            status_code=400, detail="this server has no snapshot store"
+        )
+    return store
+
+
+def _parse_load_request(body: bytes) -> LoadWorkspaceRequest:
+    try:
+        return LoadWorkspaceRequest.model_validate(json.loads(body or b"{}"))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"bad load request: {e}")
+
+
+async def _read_load_body(
+    request: Request, content_type: str
+) -> tuple[LoadWorkspaceRequest, bytes]:
+    """Read an uploaded snapshot: a ``request`` part, then the tar.
+
+    The tar is held in memory, never spooled to the server's disk.
+
+    Args:
+        request (Request): the load request.
+        content_type (str): its ``Content-Type`` header.
+
+    Returns:
+        tuple[LoadWorkspaceRequest, bytes]: the request and the tar.
+
+    Raises:
+        HTTPException: 400 for a body without both parts, or with a
+            ``key``; 413 for an oversized request part.
+    """
+    name = b""
+    body = bytearray()
+    tar = bytearray()
+    seen: set[bytes] = set()
+    async for event, data in part_events(request.stream(), content_type):
+        if event is PartEvent.BEGIN:
+            name = data
+            seen.add(name)
+        elif event is PartEvent.DATA and name == b"request":
+            body += data
+            if len(body) > MAX_REQUEST_PART:
+                raise HTTPException(
+                    status_code=413, detail="request part too large"
+                )
+        elif event is PartEvent.DATA and name == b"snapshot":
+            tar += data
+    if b"snapshot" not in seen:
+        raise HTTPException(
+            status_code=400, detail="multipart body missing 'snapshot' part"
+        )
+    req = _parse_load_request(bytes(body))
+    if req.key is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="load takes a 'key' or an uploaded 'snapshot', not both",
+        )
+    return req, bytes(tar)
 
 
 def _build_load_secrets(

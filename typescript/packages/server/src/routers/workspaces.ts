@@ -12,17 +12,16 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, stat } from 'node:fs/promises'
-import { dirname, resolve, sep } from 'node:path'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { MountSpec } from '@struktoai/mirage-core/workspace/workspace/workspace'
 import type { BaseVFS } from '@struktoai/mirage-core/vfs/base'
 import type { Mount } from '@struktoai/mirage-core/workspace/mount/spec'
 import { DiskWorkspaceStateStore, DOT_IDS, Workspace } from '@struktoai/mirage-node'
 import { newWorkspaceId } from '@struktoai/mirage-core/utils/ids'
+import type { S3Config } from '@struktoai/mirage-core/vfs/s3/config'
 import { type WorkspaceRegistry } from '../registry.ts'
-import type { VersionBackend } from '../version/backend.ts'
 import { z } from '@struktoai/mirage-core/vfs/secrets'
 import { SecretsError } from '@struktoai/mirage-core/secrets/errors'
 import { VFSConfigError } from '@struktoai/mirage-core/vfs/errors'
@@ -34,12 +33,13 @@ import {
   type WorkspaceConfigRaw,
 } from '@struktoai/mirage-node'
 import { makeBrief, makeDetail } from '../summary.ts'
+import { MAX_REQUEST_PART, MultipartError, partEvents } from '../multipart.ts'
 
 export interface WorkspaceRoutesDeps {
   registry: WorkspaceRegistry
-  snapshotRoot: string
   stateRoot: string
-  versionBackend: VersionBackend
+  /** The S3-like store a snapshot request may name a key in. */
+  snapshotStore: S3Config | undefined
 }
 
 const WRITE_RATE_LIMIT = {
@@ -64,14 +64,73 @@ interface CloneWorkspaceBody {
   override?: OverrideShape
 }
 
-interface SnapshotWorkspaceBody {
-  path: string
-}
+const SnapshotBodySchema = z.object({ key: z.string() }).strict()
+
+const LoadBodySchema = z
+  .object({
+    key: z.string().optional(),
+    id: z.string().optional(),
+    override: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict()
 
 interface LoadWorkspaceBody {
-  path: string
+  key?: string
   id?: string
   override?: OverrideShape
+}
+
+function parseLoadRequest(raw: unknown): LoadWorkspaceBody {
+  const parsed = LoadBodySchema.safeParse(raw ?? {})
+  if (!parsed.success) {
+    throw new MultipartError(400, `bad load request: ${parsed.error.message}`)
+  }
+  return parsed.data as LoadWorkspaceBody
+}
+
+/**
+ * Read an uploaded snapshot: a `request` part, then the tar. The tar is
+ * held in memory, never spooled to the server's disk.
+ *
+ * @throws MultipartError 400 for a body without both parts, or with a
+ *   `key`; 413 for an oversized request part.
+ */
+async function readLoadBody(req: FastifyRequest): Promise<[LoadWorkspaceBody, Uint8Array]> {
+  let name = ''
+  const request: Uint8Array[] = []
+  const tar: Uint8Array[] = []
+  const seen = new Set<string>()
+  let size = 0
+  for await (const event of partEvents(req.raw, req.headers['content-type'] ?? '')) {
+    if (event.kind === 'begin') {
+      name = event.name
+      seen.add(name)
+    } else if (event.kind === 'data' && name === 'request') {
+      request.push(event.data)
+      size += event.data.byteLength
+      if (size > MAX_REQUEST_PART) throw new MultipartError(413, 'request part too large')
+    } else if (event.kind === 'data' && name === 'snapshot') {
+      tar.push(event.data)
+    }
+  }
+  if (!seen.has('snapshot')) {
+    throw new MultipartError(400, "multipart body missing 'snapshot' part")
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(Buffer.concat(request).toString() || '{}')
+  } catch (e) {
+    throw new MultipartError(400, `bad load request: ${(e as Error).message}`)
+  }
+  const body = parseLoadRequest(raw)
+  if (body.key !== undefined) {
+    throw new MultipartError(400, "load takes a 'key' or an uploaded 'snapshot', not both")
+  }
+  return [body, new Uint8Array(Buffer.concat(tar))]
+}
+
+function noStore(reply: FastifyReply): FastifyReply {
+  return reply.status(400).send({ detail: 'this server has no snapshot store' })
 }
 
 /** Refuse an id that would name the state root, not a workspace. */
@@ -197,59 +256,65 @@ export function registerWorkspacesRoutes(app: FastifyInstance, deps: WorkspaceRo
 
   app.get('/v1/workspaces', () => deps.registry.list().map(makeBrief))
 
-  app.post<{ Body: LoadWorkspaceBody }>(
-    '/v1/workspaces/load',
-    WRITE_RATE_LIMIT,
-    async (req, reply) => {
-      const { path, id: workspaceId, override } = req.body
-      if (typeof path !== 'string' || path === '') {
-        return reply.status(400).send({ detail: 'path is required' })
+  app.post('/v1/workspaces/load', WRITE_RATE_LIMIT, async (req, reply) => {
+    const multipart = (req.headers['content-type'] ?? '').startsWith('multipart/')
+    let body: LoadWorkspaceBody
+    let source: string | Uint8Array
+    try {
+      if (multipart) {
+        ;[body, source] = await readLoadBody(req)
+      } else {
+        body = parseLoadRequest(req.body)
+        if (body.key === undefined) {
+          throw new MultipartError(400, "load needs a 'key' or an uploaded 'snapshot' part")
+        }
+        source = body.key
       }
-      // Confinement is inlined (not via a helper) so the static analyzer sees
-      // the startsWith barrier dominate the fs sink below.
-      const snapshotRoot = resolve(deps.snapshotRoot)
-      const safePath = resolve(snapshotRoot, path)
-      if (!safePath.startsWith(snapshotRoot + sep)) {
-        return reply.status(400).send({ detail: 'path escapes the configured root' })
+    } catch (e) {
+      if (!(e instanceof MultipartError)) throw e
+      if (multipart) void reply.header('connection', 'close')
+      return reply.status(e.statusCode).send({ detail: e.message })
+    }
+    const { key, id: workspaceId, override } = body
+    if (workspaceId !== undefined && DOT_IDS.has(workspaceId)) return refuseId(reply, workspaceId)
+    if (workspaceId !== undefined && deps.registry.has(workspaceId)) {
+      return reply.status(409).send({ detail: `workspace id already exists: ${workspaceId}` })
+    }
+    const store = typeof source === 'string' ? deps.snapshotStore : undefined
+    if (typeof source === 'string' && store === undefined) return noStore(reply)
+    let overrides: Record<string, BaseVFS | Mount>
+    try {
+      // An override mount's credential may be a pointer at one of
+      // these declarations; a container the constructor will reject
+      // is left for it to reject. Mirrors the python load route.
+      overrides = await buildOverrideMounts(override ?? null, override?.secrets)
+    } catch (e) {
+      return reply.status(400).send({ detail: `override build failed: ${(e as Error).message}` })
+    }
+    let ws: Workspace
+    try {
+      ws = await Workspace.load(
+        source,
+        {
+          ...(override?.secrets !== undefined ? { secrets: override.secrets } : {}),
+          ...(store !== undefined ? { s3: store } : {}),
+        },
+        overrides,
+      )
+    } catch (e) {
+      if ((e as { code?: unknown }).code === 'ENOENT') {
+        return reply.status(400).send({ detail: `snapshot not found: ${String(key)}` })
       }
-      if (workspaceId !== undefined && DOT_IDS.has(workspaceId)) return refuseId(reply, workspaceId)
-      if (workspaceId !== undefined && deps.registry.has(workspaceId)) {
-        return reply.status(409).send({ detail: `workspace id already exists: ${workspaceId}` })
-      }
-      let tarBuf: Buffer
-      try {
-        tarBuf = await readFile(safePath)
-      } catch {
-        return reply.status(400).send({ detail: `snapshot not found: ${path}` })
-      }
-      let overrides: Record<string, BaseVFS | Mount>
-      try {
-        // An override mount's credential may be a pointer at one of
-        // these declarations; a container the constructor will reject
-        // is left for it to reject. Mirrors the python load route.
-        overrides = await buildOverrideMounts(override ?? null, override?.secrets)
-      } catch (e) {
-        return reply.status(400).send({ detail: `override build failed: ${(e as Error).message}` })
-      }
-      let ws: Workspace
-      try {
-        ws = await Workspace.load(
-          new Uint8Array(tarBuf),
-          override?.secrets !== undefined ? { secrets: override.secrets } : {},
-          overrides,
-        )
-      } catch (e) {
-        return reply.status(400).send({ detail: `load failed: ${(e as Error).message}` })
-      }
-      let entry
-      try {
-        entry = deps.registry.add(ws, workspaceId)
-      } catch (e) {
-        return reply.status(409).send({ detail: (e as Error).message })
-      }
-      return reply.status(201).send(await makeDetail(entry))
-    },
-  )
+      return reply.status(400).send({ detail: `load failed: ${(e as Error).message}` })
+    }
+    let entry
+    try {
+      entry = deps.registry.add(ws, workspaceId)
+    } catch (e) {
+      return reply.status(409).send({ detail: (e as Error).message })
+    }
+    return reply.status(201).send(await makeDetail(entry))
+  })
 
   app.get<{ Params: WorkspaceIdParams; Querystring: WorkspaceGetQuery }>(
     '/v1/workspaces/:id',
@@ -265,13 +330,13 @@ export function registerWorkspacesRoutes(app: FastifyInstance, deps: WorkspaceRo
     const { id } = req.params
     if (!deps.registry.has(id)) return reply.status(404).send({ detail: 'workspace not found' })
     try {
-      await deps.registry.remove(id, () => deps.versionBackend.dropRepo(id))
+      await deps.registry.remove(id)
     } catch (err) {
       return reply
         .status(500)
         .send({ detail: `workspace delete failed: ${(err as Error).message}` })
     }
-    return { id, closedAt: Date.now() / 1000 }
+    return { id, closed_at: Date.now() / 1000 }
   })
 
   app.post<{ Params: WorkspaceIdParams; Body: CloneWorkspaceBody }>(
@@ -307,26 +372,29 @@ export function registerWorkspacesRoutes(app: FastifyInstance, deps: WorkspaceRo
     },
   )
 
-  app.post<{ Params: WorkspaceIdParams; Body: SnapshotWorkspaceBody }>(
+  app.get<{ Params: WorkspaceIdParams }>('/v1/workspaces/:id/snapshot', async (req, reply) => {
+    const { id } = req.params
+    if (!deps.registry.has(id)) return reply.status(404).send({ detail: 'workspace not found' })
+    const tar = await deps.registry.get(id).runner.ws.snapshot()
+    return reply
+      .type('application/x-tar')
+      .send(Buffer.from(tar.buffer, tar.byteOffset, tar.byteLength))
+  })
+
+  app.post<{ Params: WorkspaceIdParams }>(
     '/v1/workspaces/:id/snapshot',
     WRITE_RATE_LIMIT,
     async (req, reply) => {
       const { id } = req.params
       if (!deps.registry.has(id)) return reply.status(404).send({ detail: 'workspace not found' })
-      const { path } = req.body
-      if (typeof path !== 'string' || path === '') {
-        return reply.status(400).send({ detail: 'path is required' })
+      const parsed = SnapshotBodySchema.safeParse(req.body)
+      if (!parsed.success) {
+        return reply.status(400).send({ detail: `bad snapshot request: ${parsed.error.message}` })
       }
-      // Confinement is inlined (not via a helper) so the static analyzer sees
-      // the startsWith barrier dominate the fs sink below.
-      const snapshotRoot = resolve(deps.snapshotRoot)
-      const safePath = resolve(snapshotRoot, path)
-      if (!safePath.startsWith(snapshotRoot + sep)) {
-        return reply.status(400).send({ detail: 'path escapes the configured root' })
-      }
-      await mkdir(dirname(safePath), { recursive: true })
-      await deps.registry.get(id).runner.ws.snapshot(safePath)
-      return reply.status(200).send({ id, path: safePath, size: (await stat(safePath)).size })
+      if (deps.snapshotStore === undefined) return noStore(reply)
+      const { key } = parsed.data
+      const size = await deps.registry.get(id).runner.ws.snapshot(key, { s3: deps.snapshotStore })
+      return reply.status(200).send({ id, key, size })
     },
   )
 }

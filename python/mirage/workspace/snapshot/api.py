@@ -12,15 +12,39 @@
 # limitations under the License.
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
-from typing import TYPE_CHECKING
+import io
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from mirage.concurrency.limiter import run_blocking
+from mirage.types import PathSpec
+from mirage.vfs.s3.config import S3Config
 from mirage.workspace.snapshot.manifest import split_manifest_and_blobs
 from mirage.workspace.snapshot.state import to_state_dict
-from mirage.workspace.snapshot.tar_io import write_tar
+from mirage.workspace.snapshot.tar_io import read_tar, write_tar
+
+try:
+    from mirage.accessor.s3 import S3Accessor
+    from mirage.core.s3.read import read_bytes
+    from mirage.core.s3.write import write_bytes
+except ImportError:
+    S3Accessor = None  # type: ignore[assignment,misc]
 
 if TYPE_CHECKING:
     from mirage.workspace.workspace import Workspace
+
+
+def _s3_accessor(config: S3Config) -> "S3Accessor":
+    if S3Accessor is None:
+        raise ImportError(
+            "An s3 snapshot requires the 's3' extra. "
+            "Install with: pip install mirage-ai[s3]"
+        )
+    return S3Accessor(config)
+
+
+def _key_path(key: str) -> PathSpec:
+    return PathSpec.from_str_path("/" + key.lstrip("/"))
 
 
 async def snapshot(
@@ -28,7 +52,8 @@ async def snapshot(
     target,
     *,
     compress: str | None = None,
-) -> None:
+    s3: S3Config | None = None,
+) -> int:
     """Serialize a Workspace to a tar archive.
 
     Fingerprints come from ``ws._ops.records`` (each read carries the
@@ -43,9 +68,49 @@ async def snapshot(
     Args:
         ws: the workspace to snapshot.
         target: filesystem path (str/Path) OR a writable file-like
-            object (BytesIO, etc.).
+            object (BytesIO, etc.); with ``s3``, the object key.
         compress: None | "gz" | "bz2" | "xz".
+        s3 (S3Config | None): an S3-like store to put the tar in, under
+            its ``key_prefix``.
+
+    Returns:
+        int: the tar's size in bytes.
     """
     state = await to_state_dict(ws)
     manifest, blobs = split_manifest_and_blobs(state)
-    await run_blocking(write_tar, target, manifest, blobs, compress=compress)
+    buffer = io.BytesIO()
+    await run_blocking(write_tar, buffer, manifest, blobs, compress=compress)
+    data = buffer.getvalue()
+    if s3 is not None:
+        accessor = _s3_accessor(s3)
+        try:
+            await write_bytes(accessor, _key_path(target), data)
+        finally:
+            await accessor.close()
+    elif hasattr(target, "write"):
+        await run_blocking(target.write, data)
+    else:
+        await run_blocking(Path(target).write_bytes, data)
+    return len(data)
+
+
+async def read_snapshot(
+    source, *, s3: S3Config | None = None
+) -> dict[str, Any]:
+    """Read a snapshot tar back into a state dict.
+
+    Args:
+        source: filesystem path (str/Path) OR a readable file-like
+            object; with ``s3``, the object key.
+        s3 (S3Config | None): the S3-like store the tar is in.
+
+    Returns:
+        dict[str, Any]: the resolved state dict.
+    """
+    if s3 is not None:
+        accessor = _s3_accessor(s3)
+        try:
+            source = io.BytesIO(await read_bytes(accessor, _key_path(source)))
+        finally:
+            await accessor.close()
+    return await run_blocking(read_tar, source)

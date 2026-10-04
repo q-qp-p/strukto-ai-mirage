@@ -69,7 +69,7 @@ export function registerSessionCommands(program: Command): void {
       const c = buildClient()
       await c.ensureRunning({ allowSpawn: false })
       const body: Record<string, unknown> = {}
-      if (opts.id !== undefined) body.sessionId = opts.id
+      if (opts.id !== undefined) body.session_id = opts.id
       if (opts.mount !== undefined && opts.mount.length > 0) {
         body.mounts = parseMountModes(opts.mount)
       }

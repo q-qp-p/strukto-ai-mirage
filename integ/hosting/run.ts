@@ -110,9 +110,7 @@ async function run(
           ? undefined
           : Object.fromEntries(
               Object.entries(body).map(([key, value]) => [
-                host === 'python'
-                  ? key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
-                  : key,
+                key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
                 value,
               ]),
             )

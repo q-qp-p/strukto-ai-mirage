@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_DAEMON_URL,
   getConfig,
+  isLocalUrl,
   listConfig,
   loadDaemonSettings,
   resolvedConfig,
@@ -71,6 +72,33 @@ describe('loadDaemonSettings', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+
+  it('a remote URL never takes the token file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mirage-cli-settings-'))
+    try {
+      const tokenFile = join(dir, 'auth_token')
+      writeFileSync(tokenFile, 'from-file')
+      const s = loadDaemonSettings({
+        env: { MIRAGE_DAEMON_URL: 'https://mirage.example.com' },
+        configPath: '/nonexistent/config.toml',
+        tokenFile,
+      })
+      expect(s.authToken).toBe('')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.each([
+    ['http://127.0.0.1:8765', true],
+    ['http://localhost:9100', true],
+    ['http://[::1]:8765', true],
+    ['https://mirage.example.com', false],
+    ['http://10.0.0.5:8765', false],
+    ['not a url', false],
+  ])('isLocalUrl(%s) is %s', (url, local) => {
+    expect(isLocalUrl(url)).toBe(local)
   })
 
   it('reads the exact configPath even when the basename is not config.toml', () => {

@@ -1,5 +1,5 @@
 {
- "baseline": 4918,
+ "baseline": 4841,
  "modules": {
   "ops/generic/factory": {
    "python_only": {
@@ -65,9 +65,60 @@
     "createMirageMcpServer": "Python's lowlevel Server takes list and call handlers, so MirageMcpServer is a class that holds the tool table and answers both. TypeScript's McpServer registers each tool itself, so a factory registers the table and returns the server."
    }
   },
-  "server/ssh/mcp": {
+  "cli/rpc": {
    "python_only": {
-    "ChannelWriter": "The SDK's stdio transport awaits write and flush on its stdout, and asyncssh writes synchronously and drains, so Python adapts the channel's stdout. TypeScript's StdioServerTransport takes the ssh2 channel, a Node stream, as it is."
+    "rpc_cmd": "Typer registers one function per verb, so the rpc verb is a module-level `rpc_cmd`; the TypeScript CLI builds the same verb on a commander program inside registerRpcCommand."
+   },
+   "typescript_only": {
+    "registerRpcCommand": "Typer registers one function per verb, so the rpc verb is a module-level `rpc_cmd`; the TypeScript CLI builds the same verb on a commander program inside registerRpcCommand."
+   }
+  },
+  "server/rpc/server": {
+   "typescript_only": {
+    "MirageRpcServerOptions": "Python's MirageRpcServer takes its session, tool table, name and version as keyword arguments; the TypeScript constructor takes them as one options object, as MirageMcpServerOptions does for the MCP server."
+   }
+  },
+  "cli/shell": {
+   "python_only": {
+    "_Pipe": "The TypeScript CLI builds the streamed multipart body in DaemonClient.requestUpload (cli/client.ts); Python hands httpx the parts, with stdin wrapped so httpx sends it chunked.",
+    "_upload": "The TypeScript CLI builds the streamed multipart body in DaemonClient.requestUpload (cli/client.ts); Python hands httpx the parts, with stdin wrapped so httpx sends it chunked."
+   }
+  },
+  "server/routers/shell": {
+   "python_only": {
+    "_finish_upload": "TypeScript keeps it as ShellUpload.finish.",
+    "_parse_json_body": "TypeScript parses a JSON body inline with ShellBodySchema.",
+    "_read_all": "TypeScript reads a background upload whole through readPart."
+   },
+   "typescript_only": {
+    "ShellUpload": "Python holds the upload's reader task and its stdin as locals of the route.",
+    "readPart": "Python's reader feeds the stdin part inline, in _read_shell_body.",
+    "refuse": "Python raises HTTPException, which FastAPI answers."
+   }
+  },
+  "server/stdin": {
+   "python_only": {
+    "LoopStdin": "A Python line runs on the workspace runner's loop and its input lives on the server's, so each read hops loops; TypeScript has one loop.",
+    "StdinSource": "The input LoopStdin reads; TypeScript has no loop hop."
+   }
+  },
+  "server/ssh/stream": {
+   "python_only": {
+    "edited": "asyncssh's line editor runs only for a pty with a terminal type, so Python runs LineDiscipline for the rest; ssh2 has no editor, so every TypeScript pty runs it."
+   },
+   "typescript_only": {
+    "DisciplineSink": "Python's LineDiscipline takes the sink's three callbacks as arguments."
+   }
+  },
+  "server/multipart": {
+   "typescript_only": {
+    "MultipartError": "Python refuses a body with FastAPI's HTTPException.",
+    "headerParam": "Python reads header parameters with python-multipart's parse_options_header."
+   }
+  },
+  "workspace/snapshot/api": {
+   "python_only": {
+    "_s3_accessor": "Python's S3 client is the optional 's3' extra, so its accessor is built behind the install hint; TypeScript's S3 SDK is a core dependency."
    }
   }
  }

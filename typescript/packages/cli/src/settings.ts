@@ -37,6 +37,24 @@ import { ENV_DAEMON_URL, ENV_TOKEN } from './env.ts'
 
 export const DEFAULT_DAEMON_URL = 'http://127.0.0.1:8765'
 
+/**
+ * Whether a daemon URL points at this machine. Only such a URL may use
+ * the local token file or start a daemon, so neither the file's token
+ * nor a spawn ever goes to a remote host.
+ *
+ * @param url - The daemon URL.
+ * @returns True when its host is a loopback name.
+ */
+export function isLocalUrl(url: string): boolean {
+  let host: string
+  try {
+    host = new URL(url).hostname
+  } catch {
+    return false
+  }
+  return DEFAULT_ALLOWED_HOSTS.includes(host.replace(/^\[(.*)\]$/, '$1'))
+}
+
 export interface DaemonSettings {
   url: string
   authToken: string
@@ -70,7 +88,7 @@ export function loadDaemonSettings(options: LoadOptions = {}): DaemonSettings {
   if (envToken !== undefined && envToken !== '') {
     settings.authToken = envToken
   }
-  if (settings.authToken === '') {
+  if (settings.authToken === '' && isLocalUrl(settings.url)) {
     const fileToken = readTokenFile(options.tokenFile ?? defaultTokenFile(env))
     if (fileToken !== undefined && fileToken !== '') {
       settings.authToken = fileToken

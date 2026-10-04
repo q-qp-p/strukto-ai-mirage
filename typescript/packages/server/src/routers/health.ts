@@ -25,7 +25,7 @@ export function registerHealthRoutes(app: FastifyInstance, deps: HealthDeps): vo
   app.get('/v1/health', () => ({
     status: 'ok',
     workspaces: deps.registry.size(),
-    uptimeS: Math.round((Date.now() / 1000 - deps.startedAt) * 1000) / 1000,
+    uptime_s: Math.round((Date.now() / 1000 - deps.startedAt) * 1000) / 1000,
   }))
   app.post('/v1/shutdown', () => {
     deps.exit()

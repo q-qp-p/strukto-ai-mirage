@@ -23,6 +23,7 @@ import { type EventDict, Observer } from '../../observe/observer.ts'
 import type { OpRecord } from '../../observe/record.ts'
 import { type OpKwargs, OpsRegistry } from '../../ops/registry.ts'
 import type { BaseVFS } from '../../vfs/base.ts'
+import type { S3Config } from '../../vfs/s3/config.ts'
 import { HISTORY_PREFIX, HistoryViewVFS } from '../../vfs/history/history.ts'
 import { BIN_PREFIX } from '../../shell/constants.ts'
 import { Consumer } from '../lookup/types.ts'
@@ -40,8 +41,7 @@ import type { ShellParser } from '../../shell/parse/index.ts'
 import { buildFileCache } from './cache.ts'
 import { rejectConfigScript } from './guard.ts'
 import { DriftQueue, installDriftState } from '../snapshot/drift.ts'
-import { snapshot as writeSnapshot } from '../snapshot/api.ts'
-import { readFileBytes } from '../snapshot/fs.ts'
+import { readSnapshot, snapshot as writeSnapshot } from '../snapshot/api.ts'
 import {
   applyStateDict,
   buildMountArgs,
@@ -51,7 +51,6 @@ import {
 } from '../snapshot/state.ts'
 import { classifyBarePath } from '../expand/classify/path.ts'
 import { resolveGlobs } from '../expand/globs.ts'
-import { readSnapshotTar } from '../snapshot/tar_io.ts'
 import { normMountPrefix } from '../snapshot/utils.ts'
 import type { WorkspaceStateDict, MountSnapshot } from '../snapshot/types.ts'
 import type { FileEvent } from '../../types.ts'
@@ -1590,20 +1589,33 @@ export class Workspace {
     }
   }
 
-  async snapshot(target: string): Promise<number> {
-    return writeSnapshot(this, target)
+  /**
+   * Serialize this workspace to a tar: its bytes, or with a target the
+   * file it is written to, or with `s3` that key of an S3-like store.
+   *
+   * @returns The tar's bytes, or with a target its size.
+   */
+  snapshot(): Promise<Uint8Array>
+  snapshot(target: string, options?: { s3?: S3Config }): Promise<number>
+  async snapshot(target?: string, options: { s3?: S3Config } = {}): Promise<Uint8Array | number> {
+    const tar = await writeSnapshot(this, target, options)
+    return target === undefined ? tar : tar.byteLength
   }
 
+  /**
+   * Reconstruct a workspace from a snapshot tar: a file, its bytes, or
+   * with `s3` a key of an S3-like store.
+   */
   static async load<T extends typeof Workspace>(
     this: T,
     source: string | Uint8Array,
-    options: WorkspaceOptions = {},
+    options: WorkspaceOptions & { s3?: S3Config } = {},
     overrides: Record<string, BaseVFS | Mount> = {},
     cliOverrides: CLIOverrides = {},
   ): Promise<InstanceType<T>> {
-    const bytes = typeof source === 'string' ? await readFileBytes(source) : source
-    const state = (await readSnapshotTar(bytes)) as WorkspaceStateDict
-    return this.fromState(state, options, overrides, cliOverrides)
+    const { s3, ...rest } = options
+    const state = (await readSnapshot(source, s3 !== undefined ? { s3 } : {})) as WorkspaceStateDict
+    return this.fromState(state, rest, overrides, cliOverrides)
   }
 
   static async fromState<T extends typeof Workspace>(

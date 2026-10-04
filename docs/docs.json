@@ -62,8 +62,18 @@
             "group": "Getting Started",
             "pages": [
               "home/introduction",
-              "home/install",
-              "home/cli"
+              "home/install"
+            ]
+          },
+          {
+            "group": "Access",
+            "pages": [
+              "home/access/overview",
+              "home/access/http",
+              "home/access/mcp",
+              "home/access/rpc",
+              "home/access/ssh",
+              "home/access/cli"
             ]
           },
           {
@@ -78,10 +88,7 @@
               "home/observer",
               "home/permissions",
               "home/policy-engine",
-              "home/route-policy",
-              "home/auth",
-              "home/ssh",
-          "home/mcp"
+              "home/route-policy"
             ]
           },
           {
@@ -241,6 +248,13 @@
               "python/install",
               "python/quickstart",
               "python/setup/fuse"
+            ]
+          },
+          {
+            "group": "Access",
+            "pages": [
+              "python/access/in-app",
+              "python/access/server"
             ]
           },
           {
@@ -435,10 +449,16 @@
             "pages": [
               "typescript/install",
               "typescript/quickstart",
-              "typescript/server-and-cli",
               "typescript/setup/fuse",
               "typescript/python",
               "typescript/limitations"
+            ]
+          },
+          {
+            "group": "Access",
+            "pages": [
+              "typescript/access/in-app",
+              "typescript/access/server"
             ]
           },
           {
@@ -626,6 +646,28 @@
       }
     ]
   },
+  "redirects": [
+    {
+      "source": "/home/auth",
+      "destination": "/home/access/http"
+    },
+    {
+      "source": "/home/cli",
+      "destination": "/home/access/cli"
+    },
+    {
+      "source": "/home/mcp",
+      "destination": "/home/access/mcp"
+    },
+    {
+      "source": "/home/ssh",
+      "destination": "/home/access/ssh"
+    },
+    {
+      "source": "/typescript/server-and-cli",
+      "destination": "/typescript/access/server"
+    }
+  ],
   "navbar": {
     "links": [
       {

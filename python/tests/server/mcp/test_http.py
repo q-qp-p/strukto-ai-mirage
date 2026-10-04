@@ -132,6 +132,18 @@ async def test_an_unknown_workspace_or_session_is_not_found(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_and_delete_are_not_allowed(tmp_path):
+    async with daemon(tmp_path) as (base, _):
+        url = f"/v1/workspaces/{await create_workspace(base)}/mcp"
+        async with httpx.AsyncClient(base_url=base) as http:
+            got = await http.get(url)
+            deleted = await http.delete(url)
+    assert got.status_code == 405
+    assert got.json()["error"]["message"] == "Method not allowed."
+    assert deleted.status_code == 405
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_tool_is_a_protocol_error(tmp_path):
     async with daemon(tmp_path) as (base, _):
         url = f"{base}/v1/workspaces/{await create_workspace(base)}/mcp"
@@ -211,3 +223,78 @@ async def test_shell_runs_as_a_daemon_job(tmp_path):
             )
     commands = [job["command"] for job in jobs.json()]
     assert "echo from-mcp" in commands
+
+
+MCP_HEADERS = {
+    "content-type": "application/json",
+    "accept": "application/json, text/event-stream",
+}
+
+
+async def job_status(base: str, workspace_id: str, command: str) -> str:
+    async with httpx.AsyncClient(base_url=base) as http:
+        for _ in range(100):
+            jobs = await http.get(
+                "/v1/jobs", params={"workspace_id": workspace_id}
+            )
+            statuses = [
+                job["status"]
+                for job in jobs.json()
+                if job["command"] == command
+            ]
+            if statuses and statuses[0] == "canceled":
+                return statuses[0]
+            await asyncio.sleep(0.05)
+    return statuses[0] if statuses else "missing"
+
+
+def shell_call(request_id: int, command: str) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {"name": "shell", "arguments": {"command": command}},
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_request_cancels_its_shell_job(tmp_path):
+    async with daemon(tmp_path) as (base, _):
+        workspace_id = await create_workspace(base)
+        url = f"{base}/v1/workspaces/{workspace_id}/mcp"
+        async with httpx.AsyncClient() as http:
+            with pytest.raises(httpx.TimeoutException):
+                await http.post(
+                    url,
+                    json=shell_call(1, "sleep 20"),
+                    headers=MCP_HEADERS,
+                    timeout=0.5,
+                )
+        assert await job_status(base, workspace_id, "sleep 20") == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_a_clients_cancel_reaches_its_shell_job(tmp_path):
+    async with daemon(tmp_path) as (base, _):
+        workspace_id = await create_workspace(base)
+        url = f"{base}/v1/workspaces/{workspace_id}/mcp"
+        async with httpx.AsyncClient(timeout=10) as http:
+            running = asyncio.create_task(
+                http.post(
+                    url, json=shell_call(7, "sleep 20"), headers=MCP_HEADERS
+                )
+            )
+            await asyncio.sleep(0.5)
+            cancelled = await http.post(
+                url,
+                json={
+                    "jsonrpc": "2.0",
+                    "method": "notifications/cancelled",
+                    "params": {"requestId": 7},
+                },
+                headers=MCP_HEADERS,
+            )
+            assert cancelled.status_code == 202
+            answered = await asyncio.wait_for(running, 5)
+        assert answered.status_code < 300
+        assert await job_status(base, workspace_id, "sleep 20") == "canceled"

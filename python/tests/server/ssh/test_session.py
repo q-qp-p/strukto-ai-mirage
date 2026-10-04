@@ -202,6 +202,22 @@ async def test_ctrl_c_interrupts_the_running_line(ssh):
 
 
 @pytest.mark.asyncio
+async def test_a_terminal_without_a_type_prompts_and_takes_ctrl_c(ssh):
+    async with ssh.connect() as conn:
+        process = await conn.create_process(request_pty="force")
+        await _read_until(process, "mirage:/$ ")
+        process.stdin.write("sleep 30\r")
+        await asyncio.sleep(0.5)
+        process.stdin.write("\x03")
+        await _read_until(process, "^C")
+        process.stdin.write("echo status=$?\r")
+        seen = await _read_until(process, "status=130\r\n")
+        process.stdin.write("exit\r")
+        await asyncio.wait_for(process.wait_closed(), 5)
+    assert "echo status=$?\r\n" in seen
+
+
+@pytest.mark.asyncio
 async def test_ctrl_c_at_the_prompt_drops_the_half_typed_line(ssh):
     async with ssh.connect() as conn:
         process = await conn.create_process(term_type="xterm")

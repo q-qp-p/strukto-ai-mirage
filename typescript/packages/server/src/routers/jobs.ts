@@ -25,11 +25,11 @@ interface JobIdParams {
 }
 
 interface JobsListQuery {
-  workspaceId?: string
+  workspace_id?: string
 }
 
 interface WaitBody {
-  timeoutS?: number
+  timeout_s?: number
 }
 
 interface JobDetailDict extends JobBriefDict {
@@ -44,7 +44,7 @@ function toDetailDict(entry: JobEntry): JobDetailDict {
 
 export function registerJobsRoutes(app: FastifyInstance, deps: JobsRoutesDeps): void {
   app.get<{ Querystring: JobsListQuery }>('/v1/jobs', async (req) => {
-    return (await deps.jobs.list(req.query.workspaceId)).map(toBriefDict)
+    return (await deps.jobs.list(req.query.workspace_id)).map(toBriefDict)
   })
 
   app.get<{ Params: JobIdParams }>('/v1/jobs/:id', async (req, reply) => {
@@ -60,7 +60,7 @@ export function registerJobsRoutes(app: FastifyInstance, deps: JobsRoutesDeps): 
       const { id } = req.params
       if ((await deps.jobs.store.get(id)) === null)
         return reply.status(404).send({ detail: 'job not found' })
-      const entry = await deps.jobs.wait(id, req.body?.timeoutS)
+      const entry = await deps.jobs.wait(id, req.body?.timeout_s)
       return toDetailDict(entry)
     },
   )
@@ -69,6 +69,6 @@ export function registerJobsRoutes(app: FastifyInstance, deps: JobsRoutesDeps): 
     const { id } = req.params
     if ((await deps.jobs.store.get(id)) === null)
       return reply.status(404).send({ detail: 'job not found' })
-    return { jobId: id, canceled: await deps.jobs.cancel(id) }
+    return { job_id: id, canceled: await deps.jobs.cancel(id) }
   })
 }

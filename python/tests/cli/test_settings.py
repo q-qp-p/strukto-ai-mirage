@@ -18,6 +18,7 @@ from mirage.cli.settings import (
     DEFAULT_DAEMON_URL,
     config_path,
     get_config,
+    is_local_url,
     list_config,
     load_daemon_settings,
     resolved_config,
@@ -38,6 +39,32 @@ def test_load_daemon_settings_falls_back_to_token_file(tmp_path, monkeypatch):
     token_file.write_text("file-token\n")
     settings = load_daemon_settings(path=config_file)
     assert settings.auth_token == "file-token"
+
+
+def test_a_remote_url_never_takes_the_token_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("MIRAGE_TOKEN", raising=False)
+    monkeypatch.setenv("MIRAGE_DAEMON_URL", "https://mirage.example.com")
+    monkeypatch.setenv(ENV_HOME, str(tmp_path))
+    config_file = tmp_path / "config.toml"
+    config_file.write_text("")
+    (tmp_path / "auth_token").write_text("file-token\n")
+    settings = load_daemon_settings(path=config_file)
+    assert settings.auth_token == ""
+
+
+@pytest.mark.parametrize(
+    "url, local",
+    [
+        ("http://127.0.0.1:8765", True),
+        ("http://localhost:9100", True),
+        ("http://[::1]:8765", True),
+        ("https://mirage.example.com", False),
+        ("http://10.0.0.5:8765", False),
+        ("not a url", False),
+    ],
+)
+def test_is_local_url(url, local):
+    assert is_local_url(url) is local
 
 
 def test_load_daemon_settings_env_wins_over_file(tmp_path, monkeypatch):

@@ -24,26 +24,21 @@ from mirage.server.registry import WorkspaceRegistry
 async def test_an_overlapping_remove_joins_the_deletion_in_flight(
     monkeypatch,
 ):
-    # A second deletion of its own would stop the runner again and run
-    # its cleanup, then release the id after a create had reused it.
+    # A second deletion of its own would stop the runner again, then
+    # release the id after a create had reused it.
     registry = WorkspaceRegistry(idle_grace_seconds=10.0)
     entry = registry.add(Workspace({"/": (RAMVFS(), MountMode.WRITE)}), "w")
     stops: list[bool] = []
-    cleanups: list[str] = []
     stop = entry.runner.stop
 
     async def counted_stop(*, delete: bool = False) -> None:
         stops.append(delete)
         await stop(delete=delete)
 
-    async def cleanup() -> None:
-        cleanups.append("w")
-
     monkeypatch.setattr(entry.runner, "stop", counted_stop)
     first, second = await asyncio.gather(
-        registry.remove("w", cleanup), registry.remove("w", cleanup)
+        registry.remove("w"), registry.remove("w")
     )
     assert first is second is entry
     assert stops == [True]
-    assert cleanups == ["w"]
     assert "w" not in registry

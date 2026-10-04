@@ -85,8 +85,8 @@ no_ls_time() { sed -E 's/ [A-Z][a-z]{2} +[0-9]+ [0-9]{2}:[0-9]{2} / /'; }
 serr() { jq -r '.stderr // .result.stderr // empty'; }
 # The reason a refused line carries beside bash's bare `Permission denied`.
 sreason() { jq -r '.refusal.reason // .result.refusal.reason // empty'; }
-sexit() { jq -r '.exit_code // .exitCode // .result.exit_code // empty'; }
-verdict() { jq -r 'if (.exit_code // .exitCode // .result.exit_code // 1) == 0 then "allowed" else "denied" end'; }
+sexit() { jq -r '.exit_code // .result.exit_code // empty'; }
+verdict() { jq -r 'if (.exit_code // .result.exit_code // 1) == 0 then "allowed" else "denied" end'; }
 
 # Run the full battery against one CLI; emit one "key=value" line per probe.
 probe() {
@@ -197,36 +197,16 @@ probe() {
   echo "ask.drained=$($cli workspace list-asks aw </dev/null | jq 'length')"
   $cli workspace delete aw >/dev/null 2>&1 </dev/null || true
 
-  # ── versioning: commit/branch/log/clone/checkout/diff (git-backed) ──
+  # ── workspaces: get, list, and clone the live state ──
   $cli workspace delete vw >/dev/null 2>&1 </dev/null || true
   $cli workspace create "$YAML" --id vw >/dev/null </dev/null
   $cli shell -w vw -c 'echo one > /a.txt' </dev/null >/dev/null
-  $cli workspace commit vw -m first </dev/null >/dev/null
-  $cli workspace branch vw feature </dev/null >/dev/null    # feature @ first
-  $cli shell -w vw -c 'echo two > /a.txt' </dev/null >/dev/null
-  $cli workspace commit vw -m second </dev/null >/dev/null  # main @ second
-  echo "version.log=$($cli workspace log vw </dev/null | jq -r '[.[].message] | join(",")')"
-  echo "version.branch_log=$($cli workspace log vw -b feature </dev/null | jq -r '[.[].message] | join(",")')"
   echo "ws.get_mounts=$($cli workspace get vw </dev/null | jq -r '[.mounts[].prefix] | join(",")')"
   echo "ws.list_has_vw=$($cli workspace list </dev/null | jq -r 'if (map(.id) | index("vw")) != null then "yes" else "no" end')"
-
-  # clone live state (two), and clone from the first commit (one)
   $cli workspace delete vwc >/dev/null 2>&1 </dev/null || true
   $cli workspace clone vw --id vwc </dev/null >/dev/null
   echo "clone.content=$($cli shell -w vwc -c 'cat /a.txt' </dev/null | sout)"
   $cli workspace delete vwc >/dev/null 2>&1 </dev/null || true
-  local first
-  first="$($cli workspace log vw </dev/null | jq -r '.[-1].id')"
-  $cli workspace delete vwa >/dev/null 2>&1 </dev/null || true
-  $cli workspace clone vw --id vwa --at "$first" </dev/null >/dev/null
-  echo "clone.at_first=$($cli shell -w vwa -c 'cat /a.txt' </dev/null | sout)"
-  $cli workspace delete vwa >/dev/null 2>&1 </dev/null || true
-
-  $cli workspace checkout vw "$first" </dev/null >/dev/null 2>&1
-  echo "version.checkout_first=$($cli shell -w vw -c 'cat /a.txt' </dev/null | sout)"
-  $cli workspace checkout vw main </dev/null >/dev/null 2>&1
-  $cli shell -w vw -c 'echo three > /a.txt' </dev/null >/dev/null
-  echo "version.diff=$($cli workspace diff vw </dev/null | jq -rc '{added,modified,deleted}')"
   $cli workspace delete vw >/dev/null 2>&1 </dev/null || true
 
   # ── fuse: backend:fuse config is accepted and the workspace operates ──

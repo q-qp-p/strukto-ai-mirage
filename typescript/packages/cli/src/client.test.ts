@@ -12,12 +12,12 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DaemonConfigError } from '@struktoai/mirage-server/daemon_config'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { DaemonClient } from './client.ts'
+import { DaemonClient, DaemonUnreachable } from './client.ts'
 
 describe('DaemonClient spawn config validation', () => {
   let home: string
@@ -44,5 +44,16 @@ describe('DaemonClient spawn config validation', () => {
     })
     await expect(client.ensureRunning({ timeoutMs: 500 })).rejects.toThrow(DaemonConfigError)
     await expect(client.ensureRunning({ timeoutMs: 500 })).rejects.toThrow(/typo_key/)
+  })
+
+  it('never spawns for a remote URL', async () => {
+    const client = new DaemonClient({
+      url: 'https://mirage.invalid',
+      authToken: '',
+      idleGraceSeconds: 30,
+    })
+    await expect(client.ensureRunning({ timeoutMs: 500 })).rejects.toThrow(DaemonUnreachable)
+    expect(existsSync(join(home, 'auth_token'))).toBe(false)
+    expect(existsSync(join(home, 'daemon.log'))).toBe(false)
   })
 })
