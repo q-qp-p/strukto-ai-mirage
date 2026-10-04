@@ -12,11 +12,13 @@
 # limitations under the License.
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import posixpath
 from dataclasses import dataclass
 
 from dulwich.refs import Ref
 
 from mirage.commands.cli.builtin.git.branch import (
+    refuse_ambiguous,
     remote_branch,
     set_up_tracking,
     track_mode,
@@ -38,6 +40,7 @@ from mirage.commands.cli.builtin.git.errors import (
     NoWorkspaceError,
     OneReferenceError,
     RefLockError,
+    RefReadOnlyError,
     UnknownSwitchError,
 )
 from mirage.commands.cli.builtin.git.format import short, subject
@@ -54,8 +57,12 @@ from mirage.commands.cli.builtin.git.refs import (
     set_head,
     valid_ref_name,
 )
-from mirage.commands.cli.builtin.git.revparse import resolve_commit
-from mirage.commands.cli.builtin.git.session import opened
+from mirage.commands.cli.builtin.git.revparse import (
+    note_ambiguity,
+    resolve_commit,
+)
+from mirage.commands.cli.builtin.git.session import index_locked, opened
+from mirage.commands.cli.builtin.git.types import RepoLocation
 from mirage.commands.cli.builtin.git.util import (
     check_operands,
     escaped,
@@ -182,6 +189,10 @@ async def switch(
                     commit = resolve_commit(repo, start or HEAD)
                 except GitError as exc:
                     raise InvalidReferenceError(start or HEAD) from exc
+                if start is not None:
+                    await refuse_ambiguous(
+                        dispatch, location, repo, start, False
+                    )
             # After the start point and before anything is written,
             # which is git's own order. A ref is a path below .git, so
             # an unchecked name reaches write_ref as one: -c
@@ -215,6 +226,7 @@ async def switch(
             # what leaves ``switch -c`` as the only line an unborn HEAD
             # accepts. Pinned against git 2.50.1.
             if not flags.detach and target == head.branch and ref in known:
+                note_ambiguity(repo, target)
                 # Moving nothing is not the same as having nothing to
                 # check: git dies on an unresolved index here too, so
                 # the shortcut reads it before it answers. Every ref
@@ -233,8 +245,16 @@ async def switch(
                 else remote_branch(repo, target)
             )
             creating = start is not None
+            # A branch of that name wins over every other reading, as
+            # git's switch reads it, though the name is still reported
+            # as ambiguous.
+            local = not flags.detach and start is None and ref in known
+            if local:
+                note_ambiguity(repo, target)
             try:
-                commit = resolve_commit(repo, start or target)
+                commit = resolve_commit(
+                    repo, ref.decode() if local else (start or target)
+                )
             except GitError as exc:
                 raise InvalidReferenceError(target) from exc
             attached = creating or (not flags.detach and ref in known)
@@ -252,6 +272,7 @@ async def switch(
             target,
             ref if attached else None,
             creating,
+            start or HEAD,
             creating and start is None,
         )
         tracking, warning = (
@@ -284,3 +305,21 @@ async def switch(
     if fl.as_bool("quiet"):
         return None, IOResult(stderr=(moved.warnings + warning).encode())
     return yield_bytes(carried.encode()), IOResult(stderr=note.encode())
+
+
+def switch_read_only(
+    inv: CLIInvocation[None], location: RepoLocation | None
+) -> GitError:
+    """switch's refusal by a read-only mount: the new branch's ref under
+    ``-c``, whose lock git takes first, and the index's otherwise.
+
+    Args:
+        inv (CLIInvocation[None]): the line's invocation record.
+        location (RepoLocation | None): the repository it opened.
+    """
+    name = FlagView(inv.flags).as_str("create")
+    if name is None:
+        return index_locked(inv, location)
+    ref = f"{BRANCH_PREFIX}{name}"
+    root = location.commondir if location is not None else ".git"
+    return RefReadOnlyError(ref, posixpath.join(root, ref))

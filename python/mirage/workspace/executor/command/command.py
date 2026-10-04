@@ -473,7 +473,7 @@ async def handle_command(
             else None,
             cmd_name,
             session.cwd,
-            str_flag_paths=cmd_name != "tar",
+            str_flag_paths=cmd_name not in ("tar", "diff"),
         )
         cross_texts = (
             find_expr_tokens
@@ -490,13 +490,13 @@ async def handle_command(
                     command=cmd_str, exit_code=code, stderr=refusal_msg
                 ),
             )
-        # sort's output flag and cp/mv's -t route to their owning mount but
-        # are not inputs. Use the parser's operands so aliases and repeated
-        # paths keep their positions instead of subtracting matching path
-        # strings afterward.
+        # sort's output flag, cp/mv's -t and diff's -X route to their
+        # owning mount but are not inputs. Use the parser's operands so
+        # aliases and repeated paths keep their positions instead of
+        # subtracting matching path strings afterward.
         cross_scopes = (
             cross_parsed.paths
-            if cmd_name in ("sort", "cp", "mv")
+            if cmd_name in ("sort", "cp", "mv", "diff")
             else path_scopes
         )
         cross_flags = cross_parsed.flag_kwargs

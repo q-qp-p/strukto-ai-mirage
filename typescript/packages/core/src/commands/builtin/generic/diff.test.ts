@@ -11,11 +11,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
-// diff's stdin operands, pinned on GNU diffutils 3.10.
+// diff's stdin operands and as-typed names, pinned on GNU diffutils 3.10.
 // Mirrors python/tests/commands/builtin/generic/test_diff.py.
 
 import { describe, expect, it } from 'vitest'
-import { diffGeneric } from './diff.ts'
+import { diffGeneric, switchWords } from './diff.ts'
 import { FileStat, FileType, PathSpec } from '../../../types.ts'
 import type { CommandOpts } from '../../config.ts'
 
@@ -46,5 +46,20 @@ describe('diffGeneric with stdin', () => {
     const opts = { flags: {}, stdin: ENC.encode('abc') } as unknown as CommandOpts
     const [out, io] = await diffGeneric([DASH, DEV_STDIN], opts, unread, readdir, stat)
     expect([out, io.exitCode]).toEqual([null, 0])
+  })
+
+  it('keeps the option words as typed for the header', () => {
+    expect(switchWords(['-ru', '--exclude', '.git', 'a', 'b', '-x*.log'])).toEqual([
+      '-ru',
+      '--exclude',
+      '.git',
+      '-x*.log',
+    ])
+    expect(switchWords(['--exclude=.git', '-r', 'a', '--', '-b'])).toEqual([
+      '--exclude=.git',
+      '-r',
+      '--',
+    ])
+    expect(switchWords(['-rx', 'pat', '-U', '1', 'a', 'b'])).toEqual(['-rx', 'pat', '-U', '1'])
   })
 })

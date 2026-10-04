@@ -234,16 +234,26 @@ export function fatal(exc: GitError): CommandFnResult {
 export function gitBool(values: readonly string[], key: string, fallback: boolean): boolean {
   let answer = fallback
   for (const value of values) {
-    const word = value.toLowerCase()
-    if (TRUE_WORDS.includes(word)) answer = true
-    else if (FALSE_WORDS.includes(word)) answer = false
-    else {
-      const number = integer(value)
-      if (number === null) throw new BadConfigValueError(value, key)
-      answer = number !== 0
-    }
+    const parsed = maybeBool(value)
+    if (parsed === null) throw new BadConfigValueError(value, key)
+    answer = parsed
   }
   return answer
+}
+
+/**
+ * `git_parse_maybe_bool`: `true`/`yes`/`on` or `false`/`no`/`off` in any case,
+ * empty for false, or an integer for whether it is nonzero; null for anything
+ * else, which each caller answers in its own way.
+ *
+ * @param value the value as typed or as the config spells it
+ */
+export function maybeBool(value: string): boolean | null {
+  const word = value.toLowerCase()
+  if (TRUE_WORDS.includes(word)) return true
+  if (FALSE_WORDS.includes(word)) return false
+  const number = integer(value)
+  return number === null ? null : number !== 0
 }
 
 /**

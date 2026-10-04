@@ -13,7 +13,7 @@
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 import pytest
 
-from mirage.commands.builtin.generic.diff import diff
+from mirage.commands.builtin.generic.diff import DiffFlags, diff, switch_words
 from mirage.types import FileStat, FileType, PathSpec
 
 
@@ -51,6 +51,27 @@ async def test_two_stdin_operands_are_one_file():
         read_bytes=unread,
         readdir_fn=_readdir,
         stat_fn=_stat,
+        flags=DiffFlags(),
         stdin=b"abc",
     )
     assert (out, io.exit_code) == (None, 0)
+
+
+def test_switch_words_keep_the_option_words_as_typed():
+    assert switch_words(["-ru", "--exclude", ".git", "a", "b", "-x*.log"]) == [
+        "-ru",
+        "--exclude",
+        ".git",
+        "-x*.log",
+    ]
+    assert switch_words(["--exclude=.git", "-r", "a", "--", "-b"]) == [
+        "--exclude=.git",
+        "-r",
+        "--",
+    ]
+    assert switch_words(["-rx", "pat", "-U", "1", "a", "b"]) == [
+        "-rx",
+        "pat",
+        "-U",
+        "1",
+    ]

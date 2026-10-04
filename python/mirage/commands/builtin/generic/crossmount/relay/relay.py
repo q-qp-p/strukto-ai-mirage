@@ -129,7 +129,7 @@ async def run_relay(
             scopes, flag_kwargs, dispatch, storage_key, ns, stdin
         )
     if cmd_name == Cmd.DIFF:
-        return await run_diff(scopes, flag_kwargs, dispatch, stdin)
+        return await run_diff(scopes, flag_kwargs, dispatch, stdin, argv)
     if cmd_name == Cmd.PASTE:
         return await run_paste(scopes, flag_kwargs, dispatch, stdin)
     if cmd_name == Cmd.COMM:
