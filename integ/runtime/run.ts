@@ -13,14 +13,17 @@
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import { parseCommandLimits } from '@struktoai/mirage-core/policy/builtin/output_cap'
-import { readdirSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CreateBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { MongoClient } from 'mongodb'
+import type { FileEntryWithStats, SFTPWrapper } from 'ssh2'
 import {
   buildRuntime,
   CLISpec,
+  DiskVFS,
   Limit,
   MongoDBVFS,
   MountMode,
@@ -33,6 +36,7 @@ import {
   Runtime,
   S3VFS,
   ScriptSource,
+  SSHVFS,
   snakeToCamel,
   Workspace,
   type Action,
@@ -88,6 +92,8 @@ interface FacadeSpec {
   method: string
   path: string
   data?: string
+  offset?: number
+  length?: number
 }
 
 interface Step {
@@ -504,6 +510,31 @@ async function buildVfs(spec: MountSpecJson, runId: string): Promise<BaseVFS> {
     }
     return vfs
   }
+  if (spec.vfs === 'disk') {
+    return new DiskVFS({ root: mkdtempSync(join(tmpdir(), `mirage-integ-runtime-ts-${runId}-`)) })
+  }
+  if (spec.vfs === 'ssh') {
+    // The ssh runtime's box: a fresh directory per mount, made before the
+    // mount is, since a root that does not exist serves nothing.
+    const root = `/tmp/mirage-integ-runtime-ts-${runId}`
+    const username = process.env.MIRAGE_INTEG_SSH_USERNAME
+    const identityFile = process.env.MIRAGE_INTEG_SSH_KEY
+    const vfs = new SSHVFS({
+      host: process.env.MIRAGE_INTEG_SSH_HOST ?? '',
+      port: 2222,
+      ...(username === undefined ? {} : { username }),
+      ...(identityFile === undefined ? {} : { identityFile }),
+      root,
+    })
+    const sftp = await vfs.accessor.sftp()
+    await new Promise<void>((resolve, reject) => {
+      sftp.mkdir(root, (err) => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+    return vfs
+  }
   if (spec.vfs === 'redis') {
     return new RedisVFS({
       url: process.env.REDIS_URL ?? '',
@@ -677,6 +708,8 @@ async function runFacade(ws: Workspace, expect: Expect, spec: FacadeSpec): Promi
   if (method === undefined) return [`facade has no method ${spec.method}`]
   const args: unknown[] = [spec.path]
   if (spec.data !== undefined) args.push(ENC.encode(spec.data))
+  if (spec.offset !== undefined) args.push(spec.offset)
+  if (spec.length !== undefined) args.push(spec.length)
   if (expect.errno !== undefined) {
     // The cross-language error assertion. `throws_contains` reads the
     // message, which the two languages word differently for the same
@@ -809,6 +842,8 @@ async function runStep(
 // What a case's `backends` entry needs on this host before it can run.
 const BACKEND_REQUIRES: Record<string, string[]> = {
   ram: [],
+  disk: [],
+  ssh: ['env:MIRAGE_INTEG_SSH_HOST'],
   redis: ['env:REDIS_URL'],
   s3: ['s3'],
 }
@@ -984,6 +1019,45 @@ function backendVariants(testCase: Case): Case[] {
   })
 }
 
+// Remove the directory each disk and ssh backend mount was given; an ssh root
+// goes over the mount's own connection, so this runs before the close.
+async function removeRoots(ws: Workspace): Promise<void> {
+  for (const entry of ws.mounts()) {
+    const vfs = entry.vfs
+    if (vfs instanceof DiskVFS) rmSync(vfs.root, { recursive: true })
+    else if (vfs instanceof SSHVFS)
+      await removeRemote(await vfs.accessor.sftp(), vfs.config.root ?? '/')
+  }
+}
+
+async function removeRemote(sftp: SFTPWrapper, dir: string): Promise<void> {
+  const entries = await new Promise<FileEntryWithStats[]>((resolveFn, rejectFn) => {
+    sftp.readdir(dir, (err, list) => {
+      if (err) rejectFn(err)
+      else resolveFn(list)
+    })
+  })
+  for (const entry of entries) {
+    const path = `${dir}/${entry.filename}`
+    if (entry.attrs.isDirectory()) {
+      await removeRemote(sftp, path)
+      continue
+    }
+    await new Promise<void>((resolveFn, rejectFn) => {
+      sftp.unlink(path, (err) => {
+        if (err) rejectFn(err)
+        else resolveFn()
+      })
+    })
+  }
+  await new Promise<void>((resolveFn, rejectFn) => {
+    sftp.rmdir(dir, (err) => {
+      if (err) rejectFn(err)
+      else resolveFn()
+    })
+  })
+}
+
 async function runCase(suite: string, testCase: Case): Promise<string[]> {
   const caseId = `${suite}/${testCase.id}`
   const world = testCase.world ?? {}
@@ -1029,7 +1103,11 @@ async function runCase(suite: string, testCase: Case): Promise<string[]> {
       problems.push(...(await runStep(ws, caseId, index, step)))
     }
   } finally {
-    await ws.close()
+    try {
+      await removeRoots(ws)
+    } finally {
+      await ws.close()
+    }
   }
   return problems
 }

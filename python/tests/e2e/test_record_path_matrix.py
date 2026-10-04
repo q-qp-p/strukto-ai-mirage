@@ -118,16 +118,19 @@ _S3 = [
     ("write", C),
 ]
 
-# ssh records nothing for >>, tee -a, cat (cached), cp, mv, rm, rmdir,
-# rm -r, split's streamed read or the op-door append.
+# ssh records nothing for cat (cached), cp, mv, rm, rmdir, rm -r or
+# split's streamed read.
 _SSH = [
     ("write", K),
+    ("append", K),
+    ("append", K),
     ("write", NEW),
     ("truncate", NEW),
     ("write", DF),
     *_GENERIC_OUT[:4],
     *_GENERIC_OUT[5:],
     ("create", C),
+    ("append", C),
 ]
 
 EXPECTED = {
