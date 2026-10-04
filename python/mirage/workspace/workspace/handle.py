@@ -34,25 +34,32 @@ class Session:
     hides, mount modes, grants and standing decisions. Nothing is
     stored here; the session record stays with the session manager and
     ``state`` reads it. Obtained from ``Workspace.session``, which
-    creates the session or adopts it.
+    creates the session or adopts it. A None id is the workspace's
+    default session as it is when each call runs, the way ``ws.vfs``
+    and ``ws.shell`` follow it when a snapshot load or an attach
+    re-keys it.
     """
 
-    def __init__(self, ws: "Workspace", session_id: str) -> None:
+    def __init__(self, ws: "Workspace", session_id: str | None) -> None:
         self._ws = ws
         self._id = session_id
 
     @property
     def session_id(self) -> str:
-        return self._id
+        return (
+            self._id if self._id is not None else self._ws.default_session_id
+        )
 
     @property
     def state(self) -> SessionState:
         """The session record: cwd, env, modes, hides, decisions."""
-        return self._ws.get_session(self._id)
+        return self._ws.get_session(self.session_id)
 
     @property
     def vfs(self) -> Ops:
         """The op facade run as this session."""
+        if self._id is None:
+            return self._ws.vfs
         return self._ws.vfs._for_session(self._id)
 
     @property

@@ -43,7 +43,7 @@ import {
  * from `tool_descriptions`, descriptions read off the same constants.
  */
 export function MirageServer(workspace: Workspace, options: MirageToolOperationsOptions = {}) {
-  const session = new Session(workspace, options.sessionId ?? workspace.defaultSessionId)
+  const session = new Session(workspace, options.sessionId ?? null)
   const operations =
     options.staleWriteProtection === false
       ? new MirageToolOperations(session, false)

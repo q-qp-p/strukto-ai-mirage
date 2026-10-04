@@ -106,7 +106,7 @@ export function createMirageMcpServer(
   workspace: Workspace,
   options: MirageMcpServerOptions = {},
 ): McpServer {
-  const session = new Session(workspace, options.sessionId ?? workspace.defaultSessionId)
+  const session = new Session(workspace, options.sessionId ?? null)
   const operations =
     options.operations ??
     (options.staleWriteProtection === false

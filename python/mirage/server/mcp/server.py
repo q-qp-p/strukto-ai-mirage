@@ -135,9 +135,7 @@ class MirageMcpServer:
         session_id: str | None = None,
         operations: MirageToolOperations | None = None,
     ) -> None:
-        session = Session(
-            workspace, session_id or workspace.default_session_id
-        )
+        session = Session(workspace, session_id)
         if operations is not None:
             self._ops = operations
         elif stale_write_protection:

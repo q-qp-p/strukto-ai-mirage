@@ -12,6 +12,8 @@
 # limitations under the License.
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import io
+
 import pytest
 
 from mirage.context import reset_current_session, set_current_session
@@ -19,6 +21,7 @@ from mirage.types import MountMode
 from mirage.vfs.ram import RAMVFS
 from mirage.workspace import Session, Workspace
 from mirage.workspace.session import RAMSessionStore
+from mirage.workspace.snapshot import apply_state_dict, read_tar
 
 PROFILES = {"reviewer": {"paths": {"hide": ["/repo/secrets"]}}}
 
@@ -174,3 +177,41 @@ async def test_closing_a_session_drops_its_tool_table():
     finally:
         await ws.close()
     assert refused.is_error
+
+
+@pytest.mark.asyncio
+async def test_closing_all_sessions_drops_their_tool_tables():
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await ws.shell("echo one > /a.txt")
+    agent = await ws.session("agent")
+    try:
+        await agent.tools.call("read", {"path": "/a.txt"})
+        await ws.close_all_sessions()
+        again = await ws.session("agent")
+        refused = await again.tools.call(
+            "write", {"path": "/a.txt", "content": "two\n"}
+        )
+    finally:
+        await ws.close()
+    assert refused.is_error
+
+
+@pytest.mark.asyncio
+async def test_the_default_tool_table_follows_a_restored_default():
+    source = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await source.shell("echo one > /a.txt")
+    buf = io.BytesIO()
+    await source.snapshot(buf)
+    restored = source.default_session_id
+    await source.close()
+    buf.seek(0)
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    tools = ws.tools
+    try:
+        await apply_state_dict(ws, read_tar(buf))
+        read = await tools.call("read", {"path": "/a.txt"})
+    finally:
+        await ws.close()
+    assert ws.default_session_id == restored
+    assert not read.is_error, read.text
+    assert ws.tools is tools

@@ -17,6 +17,7 @@ import { runWithSession } from '../../context/session_context.ts'
 import { parseSessionProfile } from '../../policy/profile.ts'
 import { RAMVFS } from '../../vfs/ram/ram.ts'
 import { RAMSessionStore } from '../session/ram.ts'
+import { applyStateDict, toStateDict } from '../snapshot/state.ts'
 import { MountMode } from '../../types.ts'
 import { getTestParser, stdoutStr } from '../fixtures/workspace_fixture.ts'
 import { Session, type SessionExecuteOptions } from './handle.ts'
@@ -176,5 +177,31 @@ describe('session tools', () => {
     const again = await ws.session('agent')
     const refused = await again.tools.call('write', { path: '/a.txt', content: 'two\n' })
     expect(refused.isError).toBe(true)
+  })
+
+  it('drops the tables of every session closed at once', async () => {
+    const ws = await plain()
+    const agent = await ws.session('agent')
+    await agent.tools.call('read', { path: '/a.txt' })
+    await ws.closeAllSessions()
+    const again = await ws.session('agent')
+    const refused = await again.tools.call('write', { path: '/a.txt', content: 'two\n' })
+    expect(refused.isError).toBe(true)
+  })
+
+  it('follows the default session a snapshot restores', async () => {
+    const source = await plain()
+    const state = await toStateDict(source)
+    const ws = new Workspace(
+      { '/': new RAMVFS() },
+      { mode: MountMode.WRITE, shellParser: await getTestParser() },
+    )
+    open.push(ws)
+    const tools = ws.tools
+    await applyStateDict(ws, state)
+    const read = await tools.call('read', { path: '/a.txt' })
+    expect(ws.defaultSessionId).toBe(source.defaultSessionId)
+    expect(read.isError, read.content[0]?.text).toBeUndefined()
+    expect(ws.tools).toBe(tools)
   })
 })

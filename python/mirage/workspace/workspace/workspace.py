@@ -315,7 +315,7 @@ class Workspace:
         self._session_mgr = SessionManager(
             session_id, store=stores.sessions, seed_vars=seed_vars
         )
-        self._tools: dict[str, MirageToolOperations] = {}
+        self._tools: dict[str | None, MirageToolOperations] = {}
         # Admission policies, consulted in registration order after the
         # built-ins the registry seeds: the profile's admission rules
         # (PermissionsPolicy, reading each session's compiled rules
@@ -586,22 +586,26 @@ class Workspace:
     def tools(self) -> MirageToolOperations:
         """The agent tools as the default session; ``Session.tools``
         for another."""
-        return self._session_tools(self.default_session_id)
+        return self._session_tools(None)
 
-    def _session_tools(self, session_id: str) -> MirageToolOperations:
+    def _session_tools(self, session_id: str | None) -> MirageToolOperations:
         """The one tool table a session has, made on first use.
 
         Every caller in the process shares it, so a file the agent read
         through one is guarded when it writes through another. Closing
-        the session drops it.
+        the session drops it. The default session's table follows the
+        default as it is when each call runs, so it keeps working when a
+        snapshot load or an attach re-keys the default.
 
         Args:
-            session_id (str): the session.
+            session_id (str | None): the session; None or the default's
+                id is the default session.
         """
-        tools = self._tools.get(session_id)
+        key = None if session_id == self.default_session_id else session_id
+        tools = self._tools.get(key)
         if tools is None:
-            tools = MirageToolOperations(Session(self, session_id))
-            self._tools[session_id] = tools
+            tools = MirageToolOperations(Session(self, key))
+            self._tools[key] = tools
         return tools
 
     @property
@@ -1648,6 +1652,7 @@ class Workspace:
         await self._session_mgr.close_all()
         for session_id in closed:
             await self.job_table.close_session(session_id)
+            self._tools.pop(session_id, None)
 
     # ── mount management ────────────────────────────────────────────────────
 

@@ -72,9 +72,7 @@ class _MirageTools:
         stale_write_protection: bool = True,
         session_id: str | None = None,
     ) -> None:
-        session = Session(
-            workspace, session_id or workspace.default_session_id
-        )
+        session = Session(workspace, session_id)
         self._ops = (
             session.tools
             if stale_write_protection

@@ -43,7 +43,7 @@ import { Session } from '@struktoai/mirage-core/workspace/workspace/handle'
  * `{ text, isError }` as the MCP tool of the same name does.
  */
 export function mirageTools(ws: Workspace, options: MirageToolOperationsOptions = {}) {
-  const session = new Session(ws, options.sessionId ?? ws.defaultSessionId)
+  const session = new Session(ws, options.sessionId ?? null)
   const operations =
     options.staleWriteProtection === false
       ? new MirageToolOperations(session, false)

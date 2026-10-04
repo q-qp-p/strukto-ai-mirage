@@ -59,7 +59,7 @@ function answer(result: ToolResult): Answer {
  * carry and the text answer cannot.
  */
 export function mirageTools(ws: Workspace, options: MirageToolOperationsOptions = {}): ToolSet {
-  const session = new Session(ws, options.sessionId ?? ws.defaultSessionId)
+  const session = new Session(ws, options.sessionId ?? null)
   const operations =
     options.staleWriteProtection === false
       ? new MirageToolOperations(session, false)

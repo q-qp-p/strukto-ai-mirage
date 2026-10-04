@@ -55,9 +55,7 @@ class MirageToolkit(Toolkit):
         session_id: str | None = None,
         **kwargs: Any,
     ) -> None:
-        session = Session(
-            workspace, session_id or workspace.default_session_id
-        )
+        session = Session(workspace, session_id)
         self._ops = (
             session.tools
             if stale_write_protection

@@ -165,7 +165,7 @@ export class Workspace {
   private readonly dispatcher: Dispatcher
   readonly observer: Observer
   readonly vfs: Ops
-  private readonly toolTables = new Map<string, MirageToolOperations>()
+  private readonly toolTables = new Map<string | null, MirageToolOperations>()
   private closed = false
   private readonly lineLock = new KeyLock()
   private readonly closers: (() => Promise<void>)[] = []
@@ -854,21 +854,25 @@ export class Workspace {
 
   /** The agent tools as the default session; `Session.tools` for another. */
   get tools(): MirageToolOperations {
-    return this.sessionTools(this.defaultSessionId)
+    return this.sessionTools(null)
   }
 
   /**
    * The one tool table a session has, made on first use. Every caller in
    * the process shares it, so a file the agent read through one is
    * guarded when it writes through another. Closing the session drops it.
+   * The default session's table follows the default as it is when each
+   * call runs, so it keeps working when a snapshot load or an attach
+   * re-keys the default; null or the default's id names it.
    *
    * @internal `Session.tools` is the door.
    */
-  sessionTools(sessionId: string): MirageToolOperations {
-    let tools = this.toolTables.get(sessionId)
+  sessionTools(sessionId: string | null): MirageToolOperations {
+    const key = sessionId === this.defaultSessionId ? null : sessionId
+    let tools = this.toolTables.get(key)
     if (tools === undefined) {
-      tools = new MirageToolOperations(new Session(this, sessionId))
-      this.toolTables.set(sessionId, tools)
+      tools = new MirageToolOperations(new Session(this, key))
+      this.toolTables.set(key, tools)
     }
     return tools
   }
@@ -1039,7 +1043,10 @@ export class Workspace {
       .map((s) => s.sessionId)
       .filter((id) => id !== this.defaultSessionId)
     await this.sessionManager.closeAll()
-    for (const id of closed) await this.jobTable.closeSession(id)
+    for (const id of closed) {
+      await this.jobTable.closeSession(id)
+      this.toolTables.delete(id)
+    }
   }
 
   /**

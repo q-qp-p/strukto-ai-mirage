@@ -46,7 +46,7 @@ import { Session } from '@struktoai/mirage-core/workspace/workspace/handle'
  * alternative.
  */
 export function mirageTools(ws: Workspace, options: MirageToolOperationsOptions = {}) {
-  const session = new Session(ws, options.sessionId ?? ws.defaultSessionId)
+  const session = new Session(ws, options.sessionId ?? null)
   const operations =
     options.staleWriteProtection === false
       ? new MirageToolOperations(session, false)
