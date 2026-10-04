@@ -335,11 +335,7 @@ export async function restorePaths(
           current = await readOptional(dispatch, where)
         }
       }
-      if (
-        current === null ||
-        current.length !== blob.length ||
-        current.some((byte, at) => byte !== blob[at])
-      )
+      if (current?.length !== blob.length || current.some((byte, at) => byte !== blob[at]))
         updated += 1
       await restoreEntry(dispatch, where, entry.mode, blob, links)
     }
