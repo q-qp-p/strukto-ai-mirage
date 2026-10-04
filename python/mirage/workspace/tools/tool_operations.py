@@ -107,9 +107,10 @@ class MirageToolOperations:
     """The agent tools for one session, independent of any agent
     framework.
 
-    ``session.tools`` is the session's own table, shared by every caller
-    in the process, so a read through one guards a write through
-    another. Build one directly only to turn the guard off.
+    ``session.tools`` is the session's own table. Every guarded table of
+    a session shares the session's read history, so a read through one
+    guards a write through another. Build one directly only to turn the
+    guard off.
 
     Args:
         session (Session): The session the tools act as, with its cwd,
@@ -122,17 +123,20 @@ class MirageToolOperations:
         self, session: "Session", stale_write_protection: bool = True
     ) -> None:
         self._session = session
-        self._stale_write_protection = stale_write_protection
-        self._versions = FileVersionTracker(
-            session.vfs, stale_write_protection
+        self._own = (
+            None
+            if stale_write_protection
+            else FileVersionTracker(session.vfs, False)
         )
 
-    def _forget_reads(self) -> None:
-        """Start the read history over, for a table that follows the
-        default session when a restore puts another session there."""
-        self._versions = FileVersionTracker(
-            self._session.vfs, self._stale_write_protection
-        )
+    async def _versions(self) -> FileVersionTracker:
+        """The read history this call uses: the session's, which every
+        guarded table of the session shares, or this table's own when
+        the guard is off. A call keeps the one it started with, so a
+        restore during the call cannot mix two histories."""
+        if self._own is not None:
+            return self._own
+        return await self._session._reads()
 
     async def shell(self, command: str) -> ToolResult:
         """Run a command line in the session's shell.
@@ -158,16 +162,17 @@ class MirageToolOperations:
         Returns:
             ToolResult: The numbered lines, or the failure.
         """
+        versions = await self._versions()
         try:
-            data = await self._versions.read(path)
+            data = await versions.read(path)
         except (OSError, ValueError) as exc:
-            if not await self._versions.vfs.exists(path):
+            if not await versions.vfs.exists(path):
                 return ToolResult(f"Error: file '{path}' not found", True)
             return ToolResult(f"Error: {exc}", True)
         text = decode(data)
         lines = text.count("\n") + (1 if text and text[-1] != "\n" else 0)
         if offset <= 0 and offset + limit >= lines:
-            self._versions.mark_seen(path)
+            versions.mark_seen(path)
         return ToolResult(number_lines(text, offset, limit))
 
     async def write(self, path: str, content: str) -> ToolResult:
@@ -185,17 +190,16 @@ class MirageToolOperations:
         Returns:
             ToolResult: The confirmation, or the failure.
         """
-        if await self._versions.vfs.exists(
-            path
-        ) and not self._versions.has_read(path):
+        versions = await self._versions()
+        if await versions.vfs.exists(path) and not versions.has_read(path):
             return ToolResult(
                 f"Error: file '{path}' exists; read all of it before "
                 "overwriting it",
                 True,
             )
         try:
-            await ensure_parents(self._versions.vfs, path)
-            await self._versions.write(path, content)
+            await ensure_parents(versions.vfs, path)
+            await versions.write(path, content)
         except (StaleMirageFileError, OSError, ValueError) as exc:
             return ToolResult(f"Error: {exc}", True)
         return ToolResult(f"Written: {path}")
@@ -218,12 +222,13 @@ class MirageToolOperations:
         Returns:
             ToolResult: The confirmation, or the failure.
         """
+        versions = await self._versions()
         try:
-            content = decode(await self._versions.read_for_edit(path))
+            content = decode(await versions.read_for_edit(path))
         except StaleMirageFileError as exc:
             return ToolResult(f"Error: {exc}", True)
         except (OSError, ValueError) as exc:
-            if not await self._versions.vfs.exists(path):
+            if not await versions.vfs.exists(path):
                 return ToolResult(f"Error: file '{path}' not found", True)
             return ToolResult(f"Error: {exc}", True)
         new_content, count = replace_text(
@@ -239,7 +244,7 @@ class MirageToolOperations:
                 True,
             )
         try:
-            await self._versions.write_edit(path, new_content)
+            await versions.write_edit(path, new_content)
         except (StaleMirageFileError, OSError, ValueError) as exc:
             return ToolResult(f"Error: {exc}", True)
         occurrences = count if replace_all else 1

@@ -14,6 +14,7 @@
 
 import type { Ops } from '../../ops/ops.ts'
 import type { SessionState } from '../session/session.ts'
+import type { FileVersionTracker } from '../tools/file_version.ts'
 import type { MirageToolOperations } from '../tools/tool_operations.ts'
 import type { ExecuteOptions, ExecuteResult } from './types.ts'
 import type { Workspace } from './workspace.ts'
@@ -60,6 +61,15 @@ export class Session {
   /** The agent tools run as this session: one table per session, shared by every caller in the process. */
   get tools(): MirageToolOperations {
     return this.ws.sessionTools(this.id)
+  }
+
+  /**
+   * The read history the session's agent tools share.
+   *
+   * @internal
+   */
+  reads(): Promise<FileVersionTracker> {
+    return this.ws.sessionReads(this.id)
   }
 
   /** Run a shell line as this session; `Workspace.shell` with the session fixed. */

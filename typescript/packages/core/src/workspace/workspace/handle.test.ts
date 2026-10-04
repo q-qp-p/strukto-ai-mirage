@@ -230,4 +230,53 @@ describe('session tools', () => {
     expect(refused.isError).toBe(true)
     expect(refused.content[0]?.text).toContain('read all of it')
   })
+
+  it('shares one read history between the default tables', async () => {
+    const ws = await plain()
+    await ws.tools.call('read', { path: '/a.txt' })
+    const written = await new Session(ws, ws.defaultSessionId).tools.call('write', {
+      path: '/a.txt',
+      content: 'two\n',
+    })
+    expect(written.isError, written.content[0]?.text).toBeUndefined()
+  })
+
+  it('starts a restored session with no read history', async () => {
+    const source = await plain()
+    await source.session('agent')
+    const state = await toStateDict(source)
+    const ws = await plain()
+    const agent = (await ws.session('agent')).tools
+    await agent.call('read', { path: '/a.txt' })
+    await applyStateDict(ws, state)
+    const refused = await agent.call('write', { path: '/a.txt', content: 'two\n' })
+    expect(refused.isError).toBe(true)
+    expect(refused.content[0]?.text).toContain('read all of it')
+  })
+
+  it('counts a read in flight during a restore for no one', async () => {
+    const source = await plain()
+    const state = await toStateDict(source)
+    const ws = await plain()
+    const reads = await ws.sessionReads(null)
+    const real = reads.read.bind(reads)
+    let entered!: () => void
+    let release!: () => void
+    const inside = new Promise<void>((resolve) => (entered = resolve))
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    reads.read = async (path: string) => {
+      const data = await real(path)
+      entered()
+      await gate
+      return data
+    }
+    const pending = ws.tools.call('read', { path: '/a.txt' })
+    await inside
+    await applyStateDict(ws, state)
+    release()
+    await pending
+    const refused = await ws.tools.call('write', { path: '/a.txt', content: 'two\n' })
+    expect(refused.isError).toBe(true)
+    expect(refused.content[0]?.text).toContain('read all of it')
+  })
 })

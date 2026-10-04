@@ -12,6 +12,7 @@
 # limitations under the License.
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import asyncio
 import io
 
 import pytest
@@ -251,6 +252,82 @@ async def test_a_restored_default_starts_with_no_read_history():
         await tools.call("read", {"path": "/a.txt"})
         await apply_state_dict(ws, read_tar(buf))
         refused = await tools.call(
+            "write", {"path": "/a.txt", "content": "two\n"}
+        )
+    finally:
+        await ws.close()
+    assert refused.is_error
+    assert "read all of it" in refused.text
+
+
+@pytest.mark.asyncio
+async def test_default_tables_share_one_read_history():
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await ws.shell("echo one > /a.txt")
+    try:
+        await ws.tools.call("read", {"path": "/a.txt"})
+        written = await Session(ws, ws.default_session_id).tools.call(
+            "write", {"path": "/a.txt", "content": "two\n"}
+        )
+    finally:
+        await ws.close()
+    assert not written.is_error, written.text
+
+
+@pytest.mark.asyncio
+async def test_a_restored_session_starts_with_no_read_history():
+    source = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await source.shell("echo one > /a.txt")
+    await source.session("agent")
+    buf = io.BytesIO()
+    await source.snapshot(buf)
+    await source.close()
+    buf.seek(0)
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await ws.shell("echo one > /a.txt")
+    agent = (await ws.session("agent")).tools
+    try:
+        await agent.call("read", {"path": "/a.txt"})
+        await apply_state_dict(ws, read_tar(buf))
+        refused = await agent.call(
+            "write", {"path": "/a.txt", "content": "two\n"}
+        )
+    finally:
+        await ws.close()
+    assert refused.is_error
+    assert "read all of it" in refused.text
+
+
+@pytest.mark.asyncio
+async def test_a_read_in_flight_during_a_restore_counts_for_no_one():
+    source = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await source.shell("echo one > /a.txt")
+    buf = io.BytesIO()
+    await source.snapshot(buf)
+    await source.close()
+    buf.seek(0)
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await ws.shell("echo one > /a.txt")
+    reads = await ws._session_reads(None)
+    entered, release = asyncio.Event(), asyncio.Event()
+    real = reads.read
+
+    async def held(path: str) -> bytes:
+        data = await real(path)
+        entered.set()
+        await release.wait()
+        return data
+
+    reads.read = held  # type: ignore[method-assign]
+    try:
+        pending = asyncio.create_task(
+            ws.tools.call("read", {"path": "/a.txt"})
+        )
+        await entered.wait()
+        await apply_state_dict(ws, read_tar(buf))
+        release.set()
+        await pending
+        refused = await ws.tools.call(
             "write", {"path": "/a.txt", "content": "two\n"}
         )
     finally:

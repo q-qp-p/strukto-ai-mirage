@@ -21,6 +21,7 @@ from mirage.ops.ops import Ops
 from mirage.workspace.session import SessionState
 
 if TYPE_CHECKING:
+    from mirage.workspace.tools.file_version import FileVersionTracker
     from mirage.workspace.tools.tool_operations import MirageToolOperations
     from mirage.workspace.workspace.workspace import Workspace
 
@@ -67,6 +68,10 @@ class Session:
         """The agent tools run as this session: one table per session,
         shared by every caller in the process."""
         return self._ws._session_tools(self._id)
+
+    async def _reads(self) -> "FileVersionTracker":
+        """The read history the session's agent tools share."""
+        return await self._ws._session_reads(self._id)
 
     async def shell(
         self,

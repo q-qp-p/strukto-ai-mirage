@@ -72,12 +72,13 @@ function errorMessage(error: unknown): string {
 
 /**
  * The agent tools for one session, independent of any agent framework.
- * `session.tools` is the session's own table, shared by every caller in
- * the process, so a read through one guards a write through another.
- * Build one directly only to turn the guard off.
+ * `session.tools` is the session's own table. Every guarded table of a
+ * session shares the session's read history, so a read through one
+ * guards a write through another. Build one directly only to turn the
+ * guard off.
  */
 export class MirageToolOperations {
-  private versions: FileVersionTracker
+  private readonly own: FileVersionTracker | null
 
   /**
    * @param session The session the tools act as, with its cwd,
@@ -87,19 +88,19 @@ export class MirageToolOperations {
    */
   constructor(
     private readonly session: Session,
-    private readonly staleWriteProtection = true,
+    staleWriteProtection = true,
   ) {
-    this.versions = new FileVersionTracker(session.vfs, staleWriteProtection)
+    this.own = staleWriteProtection ? null : new FileVersionTracker(session.vfs, false)
   }
 
   /**
-   * Start the read history over, for a table that follows the default
-   * session when a restore puts another session there.
-   *
-   * @internal
+   * The read history this call uses: the session's, which every guarded
+   * table of the session shares, or this table's own when the guard is
+   * off. A call keeps the one it started with, so a restore during the
+   * call cannot mix two histories.
    */
-  forgetReads(): void {
-    this.versions = new FileVersionTracker(this.session.vfs, this.staleWriteProtection)
+  private versions(): Promise<FileVersionTracker> {
+    return this.own !== null ? Promise.resolve(this.own) : this.session.reads()
   }
 
   private lineOptions(signal: AbortSignal | undefined): SessionExecuteOptions {
@@ -112,13 +113,14 @@ export class MirageToolOperations {
   }
 
   async read(path: string, offset = 0, limit = 2000): Promise<ToolResult> {
+    const versions = await this.versions()
     let data: Uint8Array
     try {
-      data = await this.versions.read(path)
+      data = await versions.read(path)
     } catch (err) {
-      return this.readFailure(path, err)
+      return this.readFailure(versions, path, err)
     }
-    return this.numbered(path, data, offset, limit)
+    return this.numbered(versions, path, data, offset, limit)
   }
 
   /**
@@ -132,30 +134,41 @@ export class MirageToolOperations {
     offset = 0,
     limit = 2000,
   ): Promise<ToolResult | WorkspaceMediaRead> {
+    const versions = await this.versions()
     let data: Uint8Array
     try {
-      data = await this.versions.read(path)
+      data = await versions.read(path)
     } catch (err) {
-      return this.readFailure(path, err)
+      return this.readFailure(versions, path, err)
     }
     const media = mediaOf(path, data)
-    if (media === undefined) return this.numbered(path, data, offset, limit)
-    this.versions.markSeen(path)
+    if (media === undefined) return this.numbered(versions, path, data, offset, limit)
+    versions.markSeen(path)
     return media
   }
 
-  private async readFailure(path: string, err: unknown): Promise<ToolResult> {
-    if (!(await this.versions.vfs.exists(path))) {
+  private async readFailure(
+    versions: FileVersionTracker,
+    path: string,
+    err: unknown,
+  ): Promise<ToolResult> {
+    if (!(await versions.vfs.exists(path))) {
       return errorResult(`Error: file '${path}' not found`)
     }
     return errorResult(`Error: ${errorMessage(err)}`)
   }
 
-  private numbered(path: string, data: Uint8Array, offset: number, limit: number): ToolResult {
+  private numbered(
+    versions: FileVersionTracker,
+    path: string,
+    data: Uint8Array,
+    offset: number,
+    limit: number,
+  ): ToolResult {
     const text = decode(data)
     const raw = text.length === 0 ? [] : text.split(/(?<=\n)/)
     const lines = raw.length > 0 && raw[raw.length - 1] === '' ? raw.slice(0, -1) : raw
-    if (offset <= 0 && offset + limit >= lines.length) this.versions.markSeen(path)
+    if (offset <= 0 && offset + limit >= lines.length) versions.markSeen(path)
     const sliced = lines.slice(offset, offset + limit)
     const numbered = sliced.map((line, i) => `${String(i + offset + 1).padStart(6)}\t${line}`)
     return textResult(numbered.join(''))
@@ -168,12 +181,13 @@ export class MirageToolOperations {
    * change since, so a write never clobbers text the agent has not seen.
    */
   async write(path: string, content: string): Promise<ToolResult> {
-    if ((await this.versions.vfs.exists(path)) && !this.versions.hasRead(path)) {
+    const versions = await this.versions()
+    if ((await versions.vfs.exists(path)) && !versions.hasRead(path)) {
       return errorResult(`Error: file '${path}' exists; read all of it before overwriting it`)
     }
     try {
-      await ensureParents(this.versions.vfs, path)
-      await this.versions.write(path, content)
+      await ensureParents(versions.vfs, path)
+      await versions.write(path, content)
     } catch (err) {
       return errorResult(`Error: ${errorMessage(err)}`)
     }
@@ -186,12 +200,13 @@ export class MirageToolOperations {
     newString: string,
     replaceAll = false,
   ): Promise<ToolResult> {
+    const versions = await this.versions()
     let content: string
     try {
-      content = decode(await this.versions.readForEdit(path))
+      content = decode(await versions.readForEdit(path))
     } catch (err) {
       if (err instanceof StaleMirageFileError) return errorResult(`Error: ${err.message}`)
-      if (!(await this.versions.vfs.exists(path))) {
+      if (!(await versions.vfs.exists(path))) {
         return errorResult(`Error: file '${path}' not found`)
       }
       return errorResult(`Error: ${errorMessage(err)}`)
@@ -204,7 +219,7 @@ export class MirageToolOperations {
       return errorResult(`Error: string appears ${String(count)} times. Pass replace_all=true`)
     }
     try {
-      await this.versions.writeEdit(path, newContent)
+      await versions.writeEdit(path, newContent)
     } catch (err) {
       return errorResult(`Error: ${errorMessage(err)}`)
     }
