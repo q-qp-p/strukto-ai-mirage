@@ -1,5 +1,5 @@
 {
- "baseline": 4839,
+ "baseline": 4837,
  "modules": {
   "ops/generic/factory": {
    "python_only": {
@@ -125,6 +125,11 @@
   "commands/builtin/generic/tar/tar": {
    "python_only": {
     "ZeroTail": "Python reads archives through tarfile, which refuses a stream that ends inside a member's data; ZeroTail feeds it zeros past the cut. TypeScript parses the blocks itself and sees the short member directly."
+   }
+  },
+  "commands/builtin/general/curl": {
+   "typescript_only": {
+    "UNRESERVED": "TypeScript percent-encodes --data-urlencode by hand against RFC 3986's unreserved set, since encodeURIComponent also keeps !'()*; Python's quote(safe=\"\") keeps exactly that set already."
    }
   },
   "runtime/handles/file_handle": {

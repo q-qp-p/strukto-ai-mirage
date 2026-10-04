@@ -15,7 +15,7 @@
 // Mirrors python/tests/commands/builtin/generic/test_diff.py.
 
 import { describe, expect, it } from 'vitest'
-import { diffGeneric } from './diff.ts'
+import { diffGeneric, switchWords } from './diff.ts'
 import { UsageError } from '../../errors.ts'
 import { materialize } from '../../../io/types.ts'
 import { FileStat, FileType, PathSpec } from '../../../types.ts'
@@ -61,9 +61,11 @@ async function run(
   paths: PathSpec[],
   stdin: string | null = null,
   flags: Record<string, boolean> = {},
+  argv: string[] = [],
 ): Promise<[string, string, number]> {
   const opts = {
     flags,
+    argv,
     stdin: stdin === null ? null : ENC.encode(stdin),
   } as unknown as CommandOpts
   const [out, io] = await diffGeneric(paths, opts, read, readdir, stat)
@@ -105,10 +107,25 @@ describe('diffGeneric with stdin', () => {
   })
 
   it('names recursive children under the typed operands', async () => {
-    expect(await run([SUB, SUB2], null, { r: true })).toEqual([
+    expect(await run([SUB, SUB2], null, { recursive: true }, ['-r', 'sub', 'sub2'])).toEqual([
       'diff -r sub/x sub2/x\n1c1\n< 1\n---\n> 2\nOnly in sub2: y\n',
       '',
       1,
     ])
+  })
+
+  it('keeps the option words as typed for the header', () => {
+    expect(switchWords(['-ru', '--exclude', '.git', 'a', 'b', '-x*.log'])).toEqual([
+      '-ru',
+      '--exclude',
+      '.git',
+      '-x*.log',
+    ])
+    expect(switchWords(['--exclude=.git', '-r', 'a', '--', '-b'])).toEqual([
+      '--exclude=.git',
+      '-r',
+      '--',
+    ])
+    expect(switchWords(['-rx', 'pat', '-U', '1', 'a', 'b'])).toEqual(['-rx', 'pat', '-U', '1'])
   })
 })

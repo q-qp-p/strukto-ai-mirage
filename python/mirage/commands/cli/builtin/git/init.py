@@ -3,6 +3,7 @@ import posixpath
 from mirage.commands.cli.builtin.git.discover import discover
 from mirage.commands.cli.builtin.git.errors import (
     GitError,
+    InitReadOnlyError,
     NoWorkingDirectoryError,
     NoWorkspaceError,
 )
@@ -12,6 +13,7 @@ from mirage.commands.cli.builtin.git.io import (
     write_once,
 )
 from mirage.commands.cli.builtin.git.refs import valid_ref_name
+from mirage.commands.cli.builtin.git.types import RepoLocation
 from mirage.commands.cli.builtin.git.util import fatal, start_point
 from mirage.commands.cli.types import CLIInvocation
 from mirage.commands.spec.flag_view import FlagView
@@ -51,6 +53,37 @@ async def lay_out(
     )
 
 
+def named_gitdir(fl: FlagView, texts: tuple[str, ...]) -> str:
+    """The git directory an ``init`` line names: ``--git-dir``, the
+    directory itself under ``--bare``, and its ``.git`` otherwise.
+
+    Args:
+        fl (FlagView): the line's flags.
+        texts (tuple[str, ...]): the line's operands.
+    """
+    start = start_point(fl)
+    explicit = fl.as_str("git_dir")
+    if explicit:
+        return posixpath.normpath(posixpath.join(start, explicit))
+    target = posixpath.normpath(
+        posixpath.join(start, texts[0] if texts else ".")
+    )
+    return target if fl.as_bool("bare") else posixpath.join(target, ".git")
+
+
+def init_read_only(
+    inv: CLIInvocation[None], location: RepoLocation | None
+) -> GitError:
+    """init's refusal by a read-only mount, at the first directory git
+    makes.
+
+    Args:
+        inv (CLIInvocation[None]): the line's invocation record.
+        location (RepoLocation | None): the repository it opened.
+    """
+    return InitReadOnlyError(named_gitdir(FlagView(inv.flags), inv.texts))
+
+
 async def init(inv: CLIInvocation[None]) -> tuple[ByteSource | None, IOResult]:
     """Initialize through the dispatcher, preserving an existing repository.
 
@@ -84,14 +117,7 @@ async def init(inv: CLIInvocation[None]) -> tuple[ByteSource | None, IOResult]:
             posixpath.join(start, inv.texts[0] if inv.texts else ".")
         )
         bare = fl.as_bool("bare")
-        explicit = fl.as_str("git_dir")
-        gitdir = (
-            posixpath.normpath(posixpath.join(start, explicit))
-            if explicit
-            else target
-            if bare
-            else posixpath.join(target, ".git")
-        )
+        gitdir = named_gitdir(fl, inv.texts)
         branch = fl.as_str("initial_branch") or "master"
         if not valid_ref_name(f"refs/heads/{branch}") or branch.startswith(
             "-"

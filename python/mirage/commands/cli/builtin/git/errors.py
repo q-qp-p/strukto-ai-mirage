@@ -21,6 +21,20 @@ FATAL_EXIT = 128
 # for a fatal. Both appear below, which is git's own split rather than
 # ours: `git log --zzz` is 128 and `git diff --zzz` is 129.
 OPTION_EXIT = 129
+# symbolic-ref's usage and option table, every option of which this build
+# has.
+SYMBOLIC_REF_USAGE = (
+    "usage: git symbolic-ref [-m <reason>] <name> <ref>\n"
+    "   or: git symbolic-ref [-q] [--short] [--no-recurse] <name>\n"
+    "   or: git symbolic-ref --delete [-q] <name>\n"
+    "\n"
+    "    -q, --[no-]quiet      suppress error message for "
+    "non-symbolic (detached) refs\n"
+    "    -d, --[no-]delete     delete symbolic ref\n"
+    "    --[no-]short          shorten ref output\n"
+    "    --[no-]recurse        recursively dereference (default)\n"
+    "    -m <reason>           reason of the update\n"
+)
 
 # git closes each of these with a line naming the config knob that
 # turns it off. Kept verbatim so the advice reads the same whether an
@@ -196,6 +210,16 @@ class NotAWorkTreeError(GitError):
 
     def __init__(self) -> None:
         super().__init__("this operation must be run in a work tree")
+
+
+class SingleRevisionError(GitError):
+    """``rev-parse --verify`` without exactly one revision naming an object.
+
+    ``--short`` implies ``--verify``, so it is refused the same way.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("Needed a single revision")
 
 
 class BareResetError(GitError):
@@ -797,6 +821,21 @@ class UnknownSwitchError(GitError):
         super().__init__(f"unknown {noun} `{argument.lstrip('-')}'")
 
 
+class SymbolicRefSwitchError(UnknownSwitchError):
+    """``symbolic-ref`` given an option it does not know.
+
+    parse-options' refusal, then the verb's usage and option table, as
+    git prints them (pinned against git 2.47.3).
+
+    Args:
+        argument (str): the option as the user spelled it.
+    """
+
+    def __init__(self, argument: str) -> None:
+        super().__init__(argument)
+        self.args = (f"{self.args[0]}\n{SYMBOLIC_REF_USAGE}",)
+
+
 class InvalidOptionError(GitError):
     """``diff``'s wording for an option it does not know.
 
@@ -1252,6 +1291,125 @@ class RefLockError(GitError):
         )
 
 
+class SymbolicRefLockError(RefLockError):
+    """``symbolic-ref`` writing a ref whose path another ref holds.
+
+    The same lock failure as RefLockError, which ``refs_update_symref``
+    reports as an ``error`` exiting 1 rather than a fatal (pinned
+    against git 2.47.3).
+
+    Args:
+        ref (str): the full ref name that cannot be written.
+        held (str): the full ref name already there.
+    """
+
+    prefix = "error"
+    code = 1
+
+
+class SymbolicRefUsageError(GitError):
+    """``symbolic-ref`` with the wrong number of operands for its mode.
+
+    git's usage and its option table, exit 129. Every option the table
+    lists is one this build has. Pinned against git 2.47.3.
+
+    Args:
+        None.
+    """
+
+    prefix = None
+    code = OPTION_EXIT
+
+    def __init__(self) -> None:
+        super().__init__(SYMBOLIC_REF_USAGE)
+
+
+class NotASymbolicRefError(GitError):
+    """``symbolic-ref`` naming a ref that holds an object id, or nothing.
+
+    Args:
+        name (str): the ref as typed.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"ref {name} is not a symbolic ref")
+
+
+class NoSuchRefError(GitError):
+    """``symbolic-ref`` naming a ref git cannot resolve at all.
+
+    A name its ref rules refuse, or a chain of symbolic refs more than
+    five deep.
+
+    Args:
+        name (str): the ref as typed.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"No such ref: {name}")
+
+
+class NotSymbolicDeleteError(GitError):
+    """``symbolic-ref -d`` naming a ref that is not symbolic; ``-q``
+    does not quiet it.
+
+    Args:
+        name (str): the ref as typed.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"Cannot delete {name}, not a symbolic ref")
+
+
+class DeleteHeadError(GitError):
+    """``symbolic-ref -d HEAD``, which git refuses outright."""
+
+    def __init__(self) -> None:
+        super().__init__("deleting 'HEAD' is not allowed")
+
+
+class HeadOutsideRefsError(GitError):
+    """``symbolic-ref HEAD <ref>`` with a target outside ``refs/``."""
+
+    def __init__(self) -> None:
+        super().__init__("Refusing to point HEAD outside of refs/")
+
+
+class InvalidSymbolicTargetError(GitError):
+    """``symbolic-ref <name> <ref>`` with a target git's ref rules
+    refuse.
+
+    Args:
+        name (str): the ref being written.
+        target (str): the target as typed.
+    """
+
+    def __init__(self, name: str, target: str) -> None:
+        super().__init__(f"Refusing to set '{name}' to invalid ref '{target}'")
+
+
+class EmptyUpdateMessageError(GitError):
+    """``symbolic-ref -m ''``, refused before anything else is read."""
+
+    def __init__(self) -> None:
+        super().__init__("Refusing to perform update with empty message")
+
+
+class BadRefNameUpdateError(GitError):
+    """``symbolic-ref <name> <ref>`` with a name git's ref rules refuse,
+    which the ref transaction reports as an ``error`` exiting 1.
+
+    Args:
+        name (str): the ref as typed.
+    """
+
+    prefix = "error"
+    code = 1
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"refusing to update ref with bad name '{name}'")
+
+
 class InvalidTagNameError(GitError):
     """A tag name git's ref rules refuse.
 
@@ -1364,6 +1522,299 @@ class IncompatibleLogOptionsError(GitError):
         super().__init__(
             f"options '{first}' and '{second}' cannot be used together"
         )
+
+
+class AmbiguousObjectNameError(GitError):
+    """A branch started from a name two refs answer to.
+
+    git refuses it rather than picking one while
+    ``core.warnAmbiguousRefs`` is on (pinned against git 2.47.3).
+
+    Args:
+        name (str): the start point as typed.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"ambiguous object name: '{name}'")
+
+
+class AbbrevModeError(GitError):
+    """``rev-parse --abbrev-ref=<mode>`` with a mode other than ``strict``
+    or ``loose``.
+
+    Args:
+        mode (str): the mode as typed.
+    """
+
+    def __init__(self, mode: str) -> None:
+        super().__init__(f"unknown mode for --abbrev-ref: {mode}")
+
+
+class InvalidObjectNameError(GitError):
+    """A branch start point that names nothing (pinned against git
+    2.50.1).
+
+    Args:
+        name (str): the start point as typed.
+    """
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"not a valid object name: '{name}'")
+
+
+class BranchPointError(GitError):
+    """A branch start point that names something other than a commit.
+
+    git names the object and its type, then refuses the start point
+    (pinned against git 2.50.1).
+
+    Args:
+        oid (str): the object's id.
+        kind (str): its type.
+        name (str): the start point as typed.
+    """
+
+    prefix = "error"
+
+    def __init__(self, oid: str, kind: str, name: str) -> None:
+        super().__init__(
+            f"object {oid} is a {kind}, not a commit\n"
+            f"fatal: not a valid branch point: '{name}'"
+        )
+
+
+class InvalidRevisionNameError(GitError):
+    """``<rev>:<path>`` whose revision names nothing (pinned against git
+    2.50.1).
+
+    Args:
+        rev (str): the revision as typed.
+    """
+
+    def __init__(self, rev: str) -> None:
+        super().__init__(f"invalid object name '{rev}'.")
+
+
+class PathNotInRevisionError(GitError):
+    """``<rev>:<path>`` whose tree has no such path.
+
+    Said differently when the working tree has one (pinned against git
+    2.50.1).
+
+    Args:
+        path (str): the path as typed.
+        rev (str): the revision as typed.
+        on_disk (bool): whether the working tree holds the path.
+    """
+
+    def __init__(self, path: str, rev: str, on_disk: bool) -> None:
+        super().__init__(
+            f"path '{path}' exists on disk, but not in '{rev}'"
+            if on_disk
+            else f"path '{path}' does not exist in '{rev}'"
+        )
+
+
+class PathNotInIndexError(GitError):
+    """``:<path>`` the index does not hold.
+
+    Said differently when the working tree does.
+
+    Args:
+        path (str): the path as typed.
+        on_disk (bool): whether the working tree holds the path.
+    """
+
+    def __init__(self, path: str, on_disk: bool) -> None:
+        super().__init__(
+            f"path '{path}' exists on disk, but not in the index"
+            if on_disk
+            else f"path '{path}' does not exist "
+            "(neither on disk nor in the index)"
+        )
+
+
+class PathNotAtStageError(GitError):
+    """``:<n>:<path>`` the index holds at another stage, with git's hint
+    at that one.
+
+    Args:
+        path (str): the path as typed.
+        stage (int): the stage asked for.
+        held (int): a stage the index holds it at.
+    """
+
+    def __init__(self, path: str, stage: int, held: int) -> None:
+        super().__init__(
+            f"path '{path}' is in the index, but not at stage {stage}\n"
+            f"hint: Did you mean ':{held}:{path}'?"
+        )
+
+
+class DetachPathError(GitError):
+    """``checkout --detach`` given more than a commit.
+
+    Whatever is not one is read as a path, which a detach does not take
+    (pinned against git 2.50.1).
+
+    Args:
+        path (str): the operand as typed.
+    """
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            f"git checkout: --detach does not take a path argument '{path}'"
+        )
+
+
+class PathsWithBranchError(GitError):
+    """``checkout -b`` given paths as well as a start point (pinned
+    against git 2.50.1).
+
+    Args:
+        branch (str): the branch being created.
+    """
+
+    def __init__(self, branch: str) -> None:
+        super().__init__(
+            f"Cannot update paths and switch to branch '{branch}' at the "
+            "same time."
+        )
+
+
+class IndexLockError(GitError):
+    """A verb that writes the index refused by a read-only mount.
+
+    git takes the index lock before anything else and dies naming it
+    (pinned against git 2.47.3).
+
+    Args:
+        gitdir (str): the git directory.
+    """
+
+    def __init__(self, gitdir: str) -> None:
+        super().__init__(
+            f"Unable to create '{gitdir}/index.lock': Read-only file system"
+        )
+
+
+class RefReadOnlyError(GitError):
+    """A ref a read-only mount will not let a verb write.
+
+    git names the ref and the lock it could not take (pinned against git
+    2.47.3).
+
+    Args:
+        ref (str): the full ref name.
+        path (str): where the ref lives.
+    """
+
+    def __init__(self, ref: str, path: str) -> None:
+        super().__init__(
+            f"cannot lock ref '{ref}': Unable to create '{path}.lock': "
+            "Read-only file system"
+        )
+
+
+class SymbolicRefReadOnlyError(RefReadOnlyError):
+    """``symbolic-ref``'s ref transaction refused by a read-only mount, an
+    ``error`` exiting 1.
+
+    Args:
+        ref (str): the full ref name.
+        path (str): where the ref lives.
+    """
+
+    prefix = "error"
+    code = 1
+
+
+class RefDeleteReadOnlyError(GitError):
+    """A ref a read-only mount will not let ``branch -d`` or ``tag -d``
+    delete.
+
+    Args:
+        ref (str): the full ref name.
+        path (str): where the ref lives.
+    """
+
+    prefix = "error"
+    code = 1
+
+    def __init__(self, ref: str, path: str) -> None:
+        super().__init__(
+            f"could not delete reference {ref}: cannot lock ref '{ref}': "
+            f"Unable to create '{path}.lock': Read-only file system"
+        )
+
+
+class TagWriteReadOnlyError(GitError):
+    """An annotated tag a read-only mount will not let ``tag -a`` write."""
+
+    prefix = None
+
+    def __init__(self) -> None:
+        super().__init__(
+            "error: unable to create temporary file: Read-only file system\n"
+            "error: unable to write tag file\n"
+            "The tag message has been left in .git/TAG_EDITMSG"
+        )
+
+
+class CloneReadOnlyError(GitError):
+    """``clone`` into a directory a read-only mount will not let it make.
+
+    Args:
+        directory (str): the directory as typed or derived.
+    """
+
+    def __init__(self, directory: str) -> None:
+        super().__init__(
+            f"could not create work tree dir '{directory}': "
+            "Read-only file system"
+        )
+
+
+class FetchHeadReadOnlyError(GitError):
+    """``fetch`` refused by a read-only mount, at FETCH_HEAD; git exits
+    255.
+
+    Args:
+        path (str): FETCH_HEAD as git names it.
+    """
+
+    prefix = "error"
+    code = 255
+
+    def __init__(self, path: str) -> None:
+        super().__init__(f"cannot open '{path}': Read-only file system")
+
+
+class InitReadOnlyError(GitError):
+    """``init`` refused by a read-only mount, at the first directory it
+    makes.
+
+    Args:
+        gitdir (str): the git directory.
+    """
+
+    prefix = None
+    code = 1
+
+    def __init__(self, gitdir: str) -> None:
+        super().__init__(f"{gitdir}/branches/: Read-only file system")
+
+
+class InvalidDecorateError(GitError):
+    """A ``--decorate`` value that names no decoration style (pinned
+    against git 2.47.3).
+
+    Args:
+        value (str): the value as typed.
+    """
+
+    def __init__(self, value: str) -> None:
+        super().__init__(f"invalid --decorate option: {value}")
 
 
 class MalformedObjectError(GitError):

@@ -23,6 +23,17 @@ const FATAL_EXIT = 128
 // fatal. Both appear below, which is git's own split rather than ours:
 // `git log --zzz` is 128 and `git diff --zzz` is 129.
 const OPTION_EXIT = 129
+// symbolic-ref's usage and option table, every option of which this build has.
+const SYMBOLIC_REF_USAGE =
+  'usage: git symbolic-ref [-m <reason>] <name> <ref>\n' +
+  '   or: git symbolic-ref [-q] [--short] [--no-recurse] <name>\n' +
+  '   or: git symbolic-ref --delete [-q] <name>\n' +
+  '\n' +
+  '    -q, --[no-]quiet      suppress error message for non-symbolic (detached) refs\n' +
+  '    -d, --[no-]delete     delete symbolic ref\n' +
+  '    --[no-]short          shorten ref output\n' +
+  '    --[no-]recurse        recursively dereference (default)\n' +
+  '    -m <reason>           reason of the update\n'
 
 // git closes each of these with a line naming the config knob that turns it
 // off. Kept verbatim so the advice reads the same whether an agent hit real git
@@ -160,6 +171,192 @@ export class NoWorkspaceError extends GitError {
 export class NotAWorkTreeError extends GitError {
   constructor() {
     super('this operation must be run in a work tree')
+  }
+}
+
+/**
+ * A verb that writes the index refused by a read-only mount: git takes the
+ * index lock before anything else and dies naming it (pinned against git
+ * 2.47.3).
+ */
+export class IndexLockError extends GitError {
+  constructor(gitdir: string) {
+    super(`Unable to create '${gitdir}/index.lock': Read-only file system`)
+  }
+}
+
+/**
+ * A ref a read-only mount will not let a verb write: git names the ref and the
+ * lock it could not take (pinned against git 2.47.3).
+ */
+export class RefReadOnlyError extends GitError {
+  constructor(ref: string, path: string) {
+    super(`cannot lock ref '${ref}': Unable to create '${path}.lock': Read-only file system`)
+  }
+}
+
+/** `symbolic-ref`'s ref transaction refused by a read-only mount, an `error` exiting 1. */
+export class SymbolicRefReadOnlyError extends RefReadOnlyError {
+  override readonly prefix = 'error'
+  override readonly code = 1
+}
+
+/** A ref a read-only mount will not let `branch -d` or `tag -d` delete. */
+export class RefDeleteReadOnlyError extends GitError {
+  override readonly prefix = 'error'
+  override readonly code = 1
+
+  constructor(ref: string, path: string) {
+    super(
+      `could not delete reference ${ref}: cannot lock ref '${ref}': ` +
+        `Unable to create '${path}.lock': Read-only file system`,
+    )
+  }
+}
+
+/** An annotated tag a read-only mount will not let `tag -a` write. */
+export class TagWriteReadOnlyError extends GitError {
+  override readonly prefix = null
+
+  constructor() {
+    super(
+      'error: unable to create temporary file: Read-only file system\n' +
+        'error: unable to write tag file\n' +
+        'The tag message has been left in .git/TAG_EDITMSG',
+    )
+  }
+}
+
+/** `clone` into a directory a read-only mount will not let it make. */
+export class CloneReadOnlyError extends GitError {
+  constructor(directory: string) {
+    super(`could not create work tree dir '${directory}': Read-only file system`)
+  }
+}
+
+/** `fetch` refused by a read-only mount, at FETCH_HEAD; git exits 255. */
+export class FetchHeadReadOnlyError extends GitError {
+  override readonly prefix = 'error'
+  override readonly code = 255
+
+  constructor(path: string) {
+    super(`cannot open '${path}': Read-only file system`)
+  }
+}
+
+/** `init` refused by a read-only mount, at the first directory it makes. */
+export class InitReadOnlyError extends GitError {
+  override readonly prefix = null
+  override readonly code = 1
+
+  constructor(gitdir: string) {
+    super(`${gitdir}/branches/: Read-only file system`)
+  }
+}
+
+/** `checkout -b` given paths as well as a start point (pinned against git 2.50.1). */
+export class PathsWithBranchError extends GitError {
+  constructor(branch: string) {
+    super(`Cannot update paths and switch to branch '${branch}' at the same time.`)
+  }
+}
+
+/**
+ * `checkout --detach` given more than a commit: whatever is not one is read as
+ * a path, which a detach does not take (pinned against git 2.50.1).
+ */
+export class DetachPathError extends GitError {
+  constructor(path: string) {
+    super(`git checkout: --detach does not take a path argument '${path}'`)
+  }
+}
+
+/** `<rev>:<path>` whose revision names nothing (pinned against git 2.50.1). */
+export class InvalidRevisionNameError extends GitError {
+  constructor(rev: string) {
+    super(`invalid object name '${rev}'.`)
+  }
+}
+
+/**
+ * `<rev>:<path>` whose tree has no such path, said differently when the working
+ * tree has one (pinned against git 2.50.1).
+ */
+export class PathNotInRevisionError extends GitError {
+  constructor(path: string, rev: string, onDisk: boolean) {
+    super(
+      onDisk
+        ? `path '${path}' exists on disk, but not in '${rev}'`
+        : `path '${path}' does not exist in '${rev}'`,
+    )
+  }
+}
+
+/** `:<path>` the index does not hold, said differently when the working tree does. */
+export class PathNotInIndexError extends GitError {
+  constructor(path: string, onDisk: boolean) {
+    super(
+      onDisk
+        ? `path '${path}' exists on disk, but not in the index`
+        : `path '${path}' does not exist (neither on disk nor in the index)`,
+    )
+  }
+}
+
+/** `:<n>:<path>` the index holds at another stage, with git's hint at that one. */
+export class PathNotAtStageError extends GitError {
+  constructor(path: string, stage: number, held: number) {
+    super(
+      `path '${path}' is in the index, but not at stage ${String(stage)}\n` +
+        `hint: Did you mean ':${String(held)}:${path}'?`,
+    )
+  }
+}
+
+/** A branch start point that names nothing (pinned against git 2.50.1). */
+export class InvalidObjectNameError extends GitError {
+  constructor(name: string) {
+    super(`not a valid object name: '${name}'`)
+  }
+}
+
+/**
+ * A branch start point that names something other than a commit: git names the
+ * object and its type, then refuses the start point (pinned against git 2.50.1).
+ */
+export class BranchPointError extends GitError {
+  override readonly prefix = 'error'
+
+  constructor(oid: string, type: string, name: string) {
+    super(`object ${oid} is a ${type}, not a commit\nfatal: not a valid branch point: '${name}'`)
+  }
+}
+
+/**
+ * A branch started from a name two refs answer to, which git refuses rather
+ * than picking one while `core.warnAmbiguousRefs` is on (pinned against git
+ * 2.47.3).
+ */
+export class AmbiguousObjectNameError extends GitError {
+  constructor(name: string) {
+    super(`ambiguous object name: '${name}'`)
+  }
+}
+
+/** `rev-parse --abbrev-ref=<mode>` with a mode other than `strict` or `loose`. */
+export class AbbrevModeError extends GitError {
+  constructor(mode: string) {
+    super(`unknown mode for --abbrev-ref: ${mode}`)
+  }
+}
+
+/**
+ * `rev-parse --verify` (or `--short`, which implies it) not given exactly one
+ * revision that names an object.
+ */
+export class SingleRevisionError extends GitError {
+  constructor() {
+    super('Needed a single revision')
   }
 }
 
@@ -648,6 +845,18 @@ export class UnknownSwitchError extends GitError {
 }
 
 /**
+ * `symbolic-ref` given an option it does not know: parse-options' refusal, then
+ * the verb's usage and option table, as git prints them (pinned against git
+ * 2.47.3).
+ */
+export class SymbolicRefSwitchError extends UnknownSwitchError {
+  constructor(argument: string) {
+    super(argument)
+    this.message = `${this.message}\n${SYMBOLIC_REF_USAGE}`
+  }
+}
+
+/**
  * `diff`'s wording for an option it does not know.
  *
  * Same mistake as UnrecognizedArgumentError and a different sentence, because
@@ -988,6 +1197,95 @@ export class RefLockError extends GitError {
   }
 }
 
+/**
+ * `symbolic-ref` writing a ref whose path another ref holds: the same lock
+ * failure as RefLockError, which `refs_update_symref` reports as an `error`
+ * exiting 1 rather than a fatal (pinned against git 2.47.3).
+ */
+export class SymbolicRefLockError extends RefLockError {
+  override readonly prefix = 'error'
+  override readonly code = 1
+}
+
+/**
+ * `symbolic-ref` with the wrong number of operands for its mode: git's usage
+ * and its option table, exit 129. Every option the table lists is one this
+ * build has. Pinned against git 2.47.3.
+ */
+export class SymbolicRefUsageError extends GitError {
+  override readonly prefix = null
+  override readonly code = OPTION_EXIT
+
+  constructor() {
+    super(SYMBOLIC_REF_USAGE)
+  }
+}
+
+/** `symbolic-ref` naming a ref that holds an object id, or nothing at all. */
+export class NotASymbolicRefError extends GitError {
+  constructor(name: string) {
+    super(`ref ${name} is not a symbolic ref`)
+  }
+}
+
+/**
+ * `symbolic-ref` naming a ref git cannot resolve at all: a name its ref rules
+ * refuse, or a chain of symbolic refs more than five deep.
+ */
+export class NoSuchRefError extends GitError {
+  constructor(name: string) {
+    super(`No such ref: ${name}`)
+  }
+}
+
+/** `symbolic-ref -d` naming a ref that is not symbolic; `-q` does not quiet it. */
+export class NotSymbolicDeleteError extends GitError {
+  constructor(name: string) {
+    super(`Cannot delete ${name}, not a symbolic ref`)
+  }
+}
+
+/** `symbolic-ref -d HEAD`, which git refuses outright. */
+export class DeleteHeadError extends GitError {
+  constructor() {
+    super("deleting 'HEAD' is not allowed")
+  }
+}
+
+/** `symbolic-ref HEAD <ref>` with a target outside `refs/`. */
+export class HeadOutsideRefsError extends GitError {
+  constructor() {
+    super('Refusing to point HEAD outside of refs/')
+  }
+}
+
+/** `symbolic-ref <name> <ref>` with a target git's ref rules refuse. */
+export class InvalidSymbolicTargetError extends GitError {
+  constructor(name: string, target: string) {
+    super(`Refusing to set '${name}' to invalid ref '${target}'`)
+  }
+}
+
+/** `symbolic-ref -m ''`, refused before anything else is read. */
+export class EmptyUpdateMessageError extends GitError {
+  constructor() {
+    super('Refusing to perform update with empty message')
+  }
+}
+
+/**
+ * `symbolic-ref <name> <ref>` with a name git's ref rules refuse, which the
+ * ref transaction reports as an `error` exiting 1.
+ */
+export class BadRefNameUpdateError extends GitError {
+  override readonly prefix = 'error'
+  override readonly code = 1
+
+  constructor(name: string) {
+    super(`refusing to update ref with bad name '${name}'`)
+  }
+}
+
 /** A tag name git's ref rules refuse. */
 export class InvalidTagNameError extends GitError {
   constructor(name: string) {
@@ -1066,6 +1364,13 @@ export class IncompatibleOptionsError extends GitError {
 export class IncompatibleLogOptionsError extends GitError {
   constructor(first: string, second: string) {
     super(`options '${first}' and '${second}' cannot be used together`)
+  }
+}
+
+/** A `--decorate` value that names no decoration style (pinned against git 2.47.3). */
+export class InvalidDecorateError extends GitError {
+  constructor(value: string) {
+    super(`invalid --decorate option: ${value}`)
   }
 }
 

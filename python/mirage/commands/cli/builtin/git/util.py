@@ -289,17 +289,30 @@ def git_bool(values: Sequence[bytes], key: str, default: bool) -> bool:
     """
     answer = default
     for value in values:
-        word = value.lower()
-        if word in TRUE_WORDS:
-            answer = True
-        elif word in FALSE_WORDS:
-            answer = False
-        else:
-            number = _integer(value)
-            if number is None:
-                raise BadConfigValueError(value.decode(errors="replace"), key)
-            answer = number != 0
+        parsed = maybe_bool(value)
+        if parsed is None:
+            raise BadConfigValueError(value.decode(errors="replace"), key)
+        answer = parsed
     return answer
+
+
+def maybe_bool(value: bytes) -> bool | None:
+    """``git_parse_maybe_bool``: a boolean word, empty, or an integer.
+
+    ``true``/``yes``/``on`` or ``false``/``no``/``off`` in any case,
+    empty for false, or an integer for whether it is nonzero; None for
+    anything else, which each caller answers in its own way.
+
+    Args:
+        value (bytes): the value as typed or as the config spells it.
+    """
+    word = value.lower()
+    if word in TRUE_WORDS:
+        return True
+    if word in FALSE_WORDS:
+        return False
+    number = _integer(value)
+    return None if number is None else number != 0
 
 
 def multivar(
