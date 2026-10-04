@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from unittest import mock
 
 import httpx
 import httpx2
@@ -298,3 +299,28 @@ async def test_a_clients_cancel_reaches_its_shell_job(tmp_path):
             answered = await asyncio.wait_for(running, 5)
         assert answered.status_code < 300
         assert await job_status(base, workspace_id, "sleep 20") == "canceled"
+
+
+@pytest.mark.asyncio
+async def test_lets_go_of_a_call_once_its_answer_is_read(tmp_path):
+    async with daemon(tmp_path) as (base, app):
+        workspace_id = await create_workspace(base)
+        url = f"{base}/v1/workspaces/{workspace_id}/mcp"
+        inflight = app.state.mcp.inflight
+        with (
+            mock.patch.object(inflight, "add", wraps=inflight.add) as added,
+            mock.patch.object(
+                inflight, "discard", wraps=inflight.discard
+            ) as discarded,
+        ):
+            async with httpx.AsyncClient(timeout=10) as http:
+                answered = await http.post(
+                    url, json=shell_call(1, "echo hi"), headers=MCP_HEADERS
+                )
+            for _ in range(200):
+                if discarded.called:
+                    break
+                await asyncio.sleep(0.01)
+        assert "hi" in answered.text
+        added.assert_called_once()
+        discarded.assert_called_with(added.call_args.args[0])

@@ -142,9 +142,27 @@ export class McpDoor {
       settle()
       return response
     }
-    const body = response.body.pipeThrough(
-      new TransformStream<Uint8Array, Uint8Array>({ flush: settle, cancel: settle }),
-    )
+    const reader: ReadableStreamDefaultReader<Uint8Array> = response.body.getReader()
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const next = await reader.read()
+          if (next.done) {
+            settle()
+            controller.close()
+          } else {
+            controller.enqueue(next.value)
+          }
+        } catch (error) {
+          settle()
+          throw error
+        }
+      },
+      cancel(reason: unknown) {
+        settle()
+        return reader.cancel(reason)
+      },
+    })
     return new Response(body, response)
   }
 

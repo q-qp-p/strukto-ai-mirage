@@ -16,7 +16,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from '../app.ts'
 import type { AuthConfig } from '../auth/index.ts'
 
@@ -269,5 +269,28 @@ describe('cancelling an MCP shell call', () => {
     }, 500)
     await expect(running).rejects.toThrow()
     expect(await jobStatus(base, id, 'sleep 20')).toBe('canceled')
+  })
+
+  it('lets go of a call once its answer is read', async () => {
+    const { base, app } = await daemon()
+    const id = await createWorkspace(base)
+    const added = vi.spyOn(app.mcp.inflight, 'add')
+    const discarded = vi.spyOn(app.mcp.inflight, 'discard')
+    const response = await fetch(`${base}/v1/workspaces/${id}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'shell', arguments: { command: 'echo hi' } },
+      }),
+    })
+    expect(await response.text()).toContain('hi')
+    expect(added).toHaveBeenCalledTimes(1)
+    expect(discarded).toHaveBeenCalledWith(added.mock.calls[0]?.[0])
   })
 })
