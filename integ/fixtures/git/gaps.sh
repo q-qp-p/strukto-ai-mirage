@@ -32,6 +32,9 @@ mv tmp.c functions.c
 git commit -qam second
 git update-ref --create-reflog -m 'fetch: fast-forward' refs/remotes/origin/main HEAD~1
 git tag v1 HEAD~1
+git tag -a v2 -m 'release two'
+git branch dup HEAD~1
+git tag -a dup -m 'tagged dup'
 printf 'ignored\n' > debug.log
 mkdir cache empty
 printf 'ignored\n' > cache/file

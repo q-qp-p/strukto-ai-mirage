@@ -71,7 +71,37 @@ def test_parse_repo_drops_the_optional_host():
     assert (ref.owner, ref.repo) == ("acme", "tools")
 
 
-@pytest.mark.parametrize("spec", ["justaname", "a/b/c/d", "acme/", "/tools"])
+@pytest.mark.parametrize(
+    ("spec", "owner", "repo"),
+    [
+        ("https://github.com/acme/tools", "acme", "tools"),
+        ("http://github.com/acme/tools/", "acme", "tools"),
+        ("git@github.com:acme/tools.git", "acme", "tools"),
+        ("ssh://git@github.com/acme/tools.git", "acme", "tools"),
+        ("git://github.com/acme/tools", "acme", "tools"),
+    ],
+)
+def test_parse_repo_reads_a_url(spec, owner, repo):
+    ref = parse_repo(spec)
+    assert (ref.owner, ref.repo) == (owner, repo)
+
+
+@pytest.mark.parametrize(
+    ("spec", "message"),
+    [
+        ("https://github.com/acme", "invalid path: /acme"),
+        ("https://github.com/a/b/c", "invalid path: /a/b/c"),
+        ("https:///acme/tools", "no hostname detected"),
+    ],
+)
+def test_parse_repo_refuses_a_url_without_owner_and_repo(spec, message):
+    with pytest.raises(ValueError, match=message):
+        parse_repo(spec)
+
+
+@pytest.mark.parametrize(
+    "spec", ["justaname", "a/b/c/d", "acme/", "/tools", "/acme/tools"]
+)
 def test_parse_repo_refuses_a_spec_that_is_not_the_format(spec):
     with pytest.raises(ValueError, match="OWNER/REPO"):
         parse_repo(spec)

@@ -91,6 +91,16 @@ def text_out(text: str) -> tuple[ByteSource | None, IOResult]:
     return yield_bytes(text.encode()), IOResult()
 
 
+def gh_bool(fl: FlagView, name: str) -> bool:
+    """Whether a gh boolean flag is on: given bare, or as ``=true``.
+
+    Args:
+        fl (FlagView): the leaf's flags.
+        name (str): the flag's name.
+    """
+    return fl.as_bool(name) or fl.as_str(name) == "true"
+
+
 def repo_for(inv: CLIInvocation[GhConfig], fl: FlagView) -> RepoRef:
     """Resolve a typed verb's shared `-R/--repo` target."""
     return gh_repo(inv.config, fl.as_str("repo"))

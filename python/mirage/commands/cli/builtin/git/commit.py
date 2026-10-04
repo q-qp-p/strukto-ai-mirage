@@ -211,7 +211,11 @@ async def commit(
             path: (entry.mode, entry.sha)
             for path, entry in state.entries.items()
         }
-        if before is not None and before == after:
+        if (
+            before is not None
+            and before == after
+            and not fl.as_bool("allow_empty")
+        ):
             raise NothingToCommitError(
                 await render_report(
                     dispatch,

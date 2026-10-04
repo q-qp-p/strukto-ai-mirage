@@ -144,6 +144,10 @@ model GithubCommit {
   sha           String
   // The first parent, empty at the start of a chain (the synthesized root).
   parentSha     String @default("")
+  // The parents after the first, in order, as a JSON list: one for a merge,
+  // more for an octopus, none for every other commit. A fixture states them as
+  // a list.
+  otherParentsJson String @default("[]")
   message       String
   authorLogin   String
   date          String

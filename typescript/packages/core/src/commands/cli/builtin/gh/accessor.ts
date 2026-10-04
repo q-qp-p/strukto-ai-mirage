@@ -79,6 +79,11 @@ export function textOut(text: string): CommandFnResult {
   return [out, new IOResult()]
 }
 
+/** Whether a gh boolean flag is on: given bare, or as `=true`. */
+export function ghBool(fl: FlagView, name: string): boolean {
+  return fl.asBool(name) || fl.asStr(name) === 'true'
+}
+
 export function repoFor(inv: CLIInvocation, fl: FlagView): RepoRef {
   return ghRepo(inv.config, fl.asStr('repo') ?? undefined)
 }

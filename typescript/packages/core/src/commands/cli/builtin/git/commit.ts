@@ -232,7 +232,7 @@ export async function commit(inv: CLIInvocation): Promise<CommandFnResult> {
         const held = before.get(path)
         return held?.oid === entry.oid && held.mode === entry.mode
       })
-    if (same) {
+    if (same && !fl.asBool('allow_empty')) {
       throw new NothingToCommitError(
         await renderReport(repo, dispatch, statPath, head, startPoint(fl), doors.ns?.links ?? null),
       )

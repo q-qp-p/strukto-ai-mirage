@@ -30,6 +30,7 @@ from mirage.commands.cli.builtin.git.util import (
     escaped,
     fatal,
     git_bool,
+    maybe_bool,
     split_marked,
     start_point,
     switches,
@@ -381,3 +382,20 @@ def test_without_section_follows_a_value_continued_onto_a_bracket_line():
     assert b'  [b"' not in without_section(data, "branch", "c2")
     assert without_section(data, "branch", "c3").count(b"keep2") == 1
     assert without_section(data, "branch", "c4").endswith(b"# see \\\n")
+
+
+@pytest.mark.parametrize(
+    ("value", "parsed"),
+    [
+        (b"true", True),
+        (b"On", True),
+        (b"", False),
+        (b"no", False),
+        (b"2", True),
+        (b"0", False),
+        (b"1k", True),
+        (b"full", None),
+    ],
+)
+def test_maybe_bool_reads_words_and_numbers(value: bytes, parsed: bool | None):
+    assert maybe_bool(value) is parsed

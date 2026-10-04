@@ -18,17 +18,17 @@ import { posixNormpath } from '../../../../utils/path.ts'
 import type { CommandFnResult } from '../../../config.ts'
 import { FlagView } from '../../../spec/flag_view.ts'
 import type { CLIDoors, CLIInvocation } from '../../types.ts'
-import { DETACHED_ADVICE, IDENTITY, switchTo } from './checkout.ts'
-import { GitError, NoWorkspaceError } from './errors.ts'
+import { DETACHED_ADVICE, switchTo } from './checkout.ts'
+import { CloneReadOnlyError, GitError, NoWorkspaceError } from './errors.ts'
 import { configuredHeaders, fetchObjects, HEADS, ignoreFunny, TAGS } from './fetch.ts'
 import { layOut } from './init.ts'
 import { readNames, removeTree, under, writeFile } from './io.ts'
-import { append, entry, ZERO } from './reflog.ts'
+import { append, entry, IDENTITY, ZERO } from './reflog.ts'
 import { detachHead, setHead, validRefName, writeRef } from './refs.ts'
 import { openRepo } from './repo.ts'
 import { commitEntries } from './tree.ts'
 import { isLocal, openTransport, type Advertisement, type Transport } from './transport.ts'
-import type { RepoLocation } from './types.ts'
+import type { ReadOnlyRefusal, RepoLocation } from './types.ts'
 import { configSection, fatal, startPoint } from './util.ts'
 
 const ENC = new TextEncoder()
@@ -256,3 +256,7 @@ async function populate(
     )
   return notes
 }
+
+/** clone's refusal by a read-only mount, at the work tree it could not make. */
+export const cloneReadOnly: ReadOnlyRefusal = (inv) =>
+  new CloneReadOnlyError(inv.texts[1] ?? defaultDirectory(inv.texts[0] ?? ''))

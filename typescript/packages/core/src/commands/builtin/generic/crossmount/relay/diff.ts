@@ -20,15 +20,17 @@ import { crossOpts, flatten, readdirOp, statOp, streamOp } from '../utils.ts'
 import type { FlagValue } from '../../../../spec/types.ts'
 
 // Diff two files on different mounts via the shared generic diff. Pure
-// wiring: both sides are read through dispatch-relayed primitives.
+// wiring: both sides are read through dispatch-relayed primitives; `argv` is
+// the line's words, which a `diff -r` header echoes.
 export async function runDiff(
   scopes: PathSpec[],
   flagKwargs: Record<string, FlagValue>,
   dispatch: DispatchFn,
   stdin: ByteSource | null = null,
+  argv: readonly string[] = [],
 ): Promise<CrossResult> {
   const flat = flatten(scopes)
-  const opts = { ...crossOpts(flagKwargs), stdin }
+  const opts = { ...crossOpts(flagKwargs), stdin, argv: [...argv] }
   const stream = streamOp(dispatch)
   const [out, io] = await diffGeneric(flat, opts, stream, readdirOp(dispatch), statOp(dispatch))
   return [out, io]

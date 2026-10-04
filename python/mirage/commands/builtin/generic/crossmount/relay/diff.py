@@ -29,6 +29,7 @@ async def run_diff(
     flag_kwargs: dict[str, FlagValue],
     dispatch: DispatchFn,
     stdin: ByteSource | None = None,
+    argv: tuple[str, ...] = (),
 ) -> CrossResult:
     """Diff two files on different mounts via the shared generic diff.
 
@@ -40,21 +41,16 @@ async def run_diff(
         dispatch (DispatchFn): Workspace operation dispatcher.
         stdin (ByteSource | None): The line's input, which a ``-`` or
             ``/dev/stdin`` operand reads.
+        argv (tuple[str, ...]): The line's words, which a ``diff -r``
+            header echoes.
     """
     p = functools.partial
-    parsed = parse_flags(flag_kwargs)
     return await generic_diff(
         flat_scopes(scopes),
         stdin=stdin,
         read_bytes=p(relay, dispatch, "read"),
         readdir_fn=p(relay, dispatch, "readdir"),
         stat_fn=p(relay, dispatch, "stat"),
-        i=parsed.ignore_case,
-        w=parsed.ignore_all_space,
-        b=parsed.ignore_space_change,
-        e=parsed.ed,
-        u=parsed.unified,
-        q=parsed.brief,
-        r=parsed.recursive,
-        context=parsed.context,
+        flags=parse_flags(flag_kwargs),
+        argv=argv,
     )

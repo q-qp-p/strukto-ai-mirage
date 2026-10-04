@@ -13,7 +13,7 @@
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 import pytest
 
-from mirage.commands.builtin.generic.diff import diff
+from mirage.commands.builtin.generic.diff import DiffFlags, diff, switch_words
 from mirage.commands.errors import UsageError
 from mirage.io.stream import materialize
 from mirage.types import FileStat, FileType, PathSpec
@@ -55,14 +55,20 @@ async def _stat(path: PathSpec) -> FileStat:
     return FileStat(name=path.virtual.rsplit("/", 1)[-1], type=kind)
 
 
-async def _run(paths: list[PathSpec], stdin: bytes | None = None, **flags):
+async def _run(
+    paths: list[PathSpec],
+    stdin: bytes | None = None,
+    argv: tuple[str, ...] = (),
+    **flags,
+):
     out, io = await diff(
         paths,
         read_bytes=_read,
         readdir_fn=_readdir,
         stat_fn=_stat,
+        flags=DiffFlags(**flags),
         stdin=stdin,
-        **flags,
+        argv=argv,
     )
     body = b"" if out is None else await materialize(out)
     return body.decode(), (io.stderr or b"").decode(), io.exit_code
@@ -70,7 +76,7 @@ async def _run(paths: list[PathSpec], stdin: bytes | None = None, **flags):
 
 @pytest.mark.asyncio
 async def test_unified_headers_name_the_operands_as_typed():
-    out, _, code = await _run([FILE, DEV_STDIN], b"x\n", u=True)
+    out, _, code = await _run([FILE, DEV_STDIN], b"x\n", unified=True)
     assert out.startswith("--- a.txt\n+++ /dev/stdin\n")
     assert code == 1
 
@@ -86,6 +92,7 @@ async def test_two_stdin_operands_are_one_file():
         read_bytes=unread,
         readdir_fn=_readdir,
         stat_fn=_stat,
+        flags=DiffFlags(),
         stdin=b"abc",
     )
     assert (out, io.exit_code) == (None, 0)
@@ -113,8 +120,125 @@ async def test_a_lone_operand_is_gnus_missing_operand_usage_error():
 
 @pytest.mark.asyncio
 async def test_recursive_output_names_children_under_the_typed_operands():
-    assert await _run([SUB, SUB2], r=True) == (
+    assert await _run(
+        [SUB, SUB2], argv=("-r", "sub", "sub2"), recursive=True
+    ) == (
         "diff -r sub/x sub2/x\n1c1\n< 1\n---\n> 2\nOnly in sub2: y\n",
         "",
         1,
     )
+
+
+MISSING = _operand("gone", "/d/gone")
+
+
+def _gone(path: PathSpec) -> None:
+    if path.virtual == "/d/gone":
+        raise FileNotFoundError(2, "No such file or directory", "/d/gone")
+
+
+async def _stat_or_missing(path: PathSpec) -> FileStat:
+    _gone(path)
+    return await _stat(path)
+
+
+async def _read_or_missing(path: PathSpec) -> bytes:
+    _gone(path)
+    return await _read(path)
+
+
+async def _run_missing(paths: list[PathSpec], **flags):
+    out, io = await diff(
+        paths,
+        read_bytes=_read_or_missing,
+        readdir_fn=_readdir,
+        stat_fn=_stat_or_missing,
+        flags=DiffFlags(**flags),
+    )
+    body = b"" if out is None else await materialize(out)
+    return body.decode(), (io.stderr or b"").decode(), io.exit_code
+
+
+@pytest.mark.asyncio
+async def test_new_file_reads_a_missing_operand_as_empty():
+    assert await _run_missing(
+        [FILE, MISSING], new_file=True, new_first=True
+    ) == (
+        "1d0\n< hello\n",
+        "",
+        1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_unidirectional_new_file_spares_only_the_first_operand():
+    assert await _run_missing([MISSING, FILE], new_first=True) == (
+        "0a1\n> hello\n",
+        "",
+        1,
+    )
+    _, err, code = await _run_missing([FILE, MISSING], new_first=True)
+    assert (err, code) == ("diff: gone: No such file or directory\n", 2)
+
+
+@pytest.mark.asyncio
+async def test_two_missing_operands_are_both_reported():
+    _, err, code = await _run_missing(
+        [MISSING, MISSING], new_file=True, new_first=True
+    )
+    assert err == "diff: gone: No such file or directory\n" * 2
+    assert code == 2
+
+
+@pytest.mark.asyncio
+async def test_recursive_new_file_diffs_one_sided_entries_against_empty():
+    out, _, code = await _run(
+        [SUB, SUB2],
+        argv=("-rN", "sub", "sub2"),
+        recursive=True,
+        new_file=True,
+        new_first=True,
+    )
+    assert out == (
+        "diff -rN sub/x sub2/x\n1c1\n< 1\n---\n> 2\n"
+        "diff -rN sub/y sub2/y\n0a1\n> 3\n"
+    )
+    assert code == 1
+
+
+@pytest.mark.asyncio
+async def test_exclude_drops_matching_entries_inside_the_walk():
+    out, _, code = await _run(
+        [SUB, SUB2], argv=("-r", "-x", "y"), recursive=True, exclude=("y",)
+    )
+    assert out == "diff -r -x y sub/x sub2/x\n1c1\n< 1\n---\n> 2\n"
+    assert code == 1
+
+
+@pytest.mark.asyncio
+async def test_report_identical_files_says_so_and_exits_zero():
+    assert await _run([FILE, FILE], identical=True) == (
+        "Files a.txt and a.txt are identical\n",
+        "",
+        0,
+    )
+
+
+def test_switch_words_keep_the_option_words_as_typed():
+    assert switch_words(["-ru", "--exclude", ".git", "a", "b", "-x*.log"]) == [
+        "-ru",
+        "--exclude",
+        ".git",
+        "-x*.log",
+    ]
+    assert switch_words(["--exclude=.git", "-r", "a", "--", "-b"]) == [
+        "--exclude=.git",
+        "-r",
+        "--",
+    ]
+    assert switch_words(["-rx", "pat", "-U", "1", "a", "b"]) == [
+        "-rx",
+        "pat",
+        "-U",
+        "1",
+    ]

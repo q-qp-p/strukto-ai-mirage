@@ -5,10 +5,10 @@ import type { CommandFnResult } from '../../../config.ts'
 import { FlagView } from '../../../spec/flag_view.ts'
 import type { CLIInvocation } from '../../types.ts'
 import { discover } from './discover.ts'
-import { GitError, NoWorkspaceError, NoWorkingDirectoryError } from './errors.ts'
+import { GitError, InitReadOnlyError, NoWorkspaceError, NoWorkingDirectoryError } from './errors.ts'
 import { ensureDir, readOptional, under, writeFile } from './io.ts'
 import { validRefName } from './refs.ts'
-import type { Dispatch } from './types.ts'
+import type { Dispatch, ReadOnlyRefusal } from './types.ts'
 import { fatal, startPoint } from './util.ts'
 
 /** Write a new git directory's skeleton, keeping what is there. */
@@ -32,6 +32,22 @@ export async function layOut(
   }
 }
 
+/**
+ * The git directory an `init` line names: `--git-dir`, the directory itself
+ * under `--bare`, and its `.git` otherwise.
+ */
+function namedGitdir(fl: FlagView, texts: readonly string[]): string {
+  const start = startPoint(fl)
+  const explicit = fl.asStr('git_dir')
+  if (explicit !== undefined) return resolvePath(explicit, start)
+  const target = resolvePath(texts[0] ?? '.', start)
+  return fl.asBool('bare') ? target : under(target, '.git')
+}
+
+/** init's refusal by a read-only mount, at the first directory git makes. */
+export const initReadOnly: ReadOnlyRefusal = (inv) =>
+  new InitReadOnlyError(namedGitdir(new FlagView(inv.flags), inv.texts))
+
 /** Initialize through the dispatcher; no host templates, hooks or branch advisory. */
 export async function init(inv: CLIInvocation): Promise<CommandFnResult> {
   const fl = new FlagView(inv.flags)
@@ -54,13 +70,7 @@ export async function init(inv: CLIInvocation): Promise<CommandFnResult> {
       )
     const target = resolvePath(inv.texts[0] ?? '.', start)
     const bare = fl.asBool('bare')
-    const explicit = fl.asStr('git_dir')
-    let gitdir =
-      explicit === undefined
-        ? bare
-          ? target
-          : under(target, '.git')
-        : resolvePath(explicit, start)
+    let gitdir = namedGitdir(fl, inv.texts)
     const branch = fl.asStr('initial_branch') ?? 'master'
     if (!validRefName(`refs/heads/${branch}`) || branch.startsWith('-'))
       throw new GitError(`invalid branch name: '${branch}'`)

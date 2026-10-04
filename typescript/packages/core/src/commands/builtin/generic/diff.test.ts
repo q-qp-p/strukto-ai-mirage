@@ -15,7 +15,7 @@
 // Mirrors python/tests/commands/builtin/generic/test_diff.py.
 
 import { describe, expect, it } from 'vitest'
-import { diffGeneric } from './diff.ts'
+import { diffGeneric, switchWords } from './diff.ts'
 import { UsageError } from '../../errors.ts'
 import { materialize } from '../../../io/types.ts'
 import { FileStat, FileType, PathSpec } from '../../../types.ts'
@@ -40,11 +40,16 @@ const FILES: Record<string, string> = {
   '/d/sub2/y': '3\n',
 }
 const DIRS: Record<string, string[]> = { '/d/sub': ['x'], '/d/sub2': ['x', 'y'] }
+const MISSING = operand('gone', '/d/gone')
 
 function read(p: PathSpec): AsyncIterable<Uint8Array> {
   return (async function* gen() {
     await Promise.resolve()
-    yield ENC.encode(FILES[p.virtual] ?? '')
+    const text = FILES[p.virtual]
+    if (text === undefined) {
+      throw Object.assign(new Error(p.virtual), { code: 'ENOENT', path: p.virtual })
+    }
+    yield ENC.encode(text)
   })()
 }
 
@@ -57,16 +62,26 @@ function stat(p: PathSpec): Promise<FileStat> {
   return Promise.resolve(new FileStat({ name: p.virtual.split('/').pop() ?? '', type }))
 }
 
+function statOrMissing(p: PathSpec): Promise<FileStat> {
+  if (p.virtual === '/d/gone') {
+    return Promise.reject(Object.assign(new Error('/d/gone'), { code: 'ENOENT', path: '/d/gone' }))
+  }
+  return stat(p)
+}
+
 async function run(
   paths: PathSpec[],
   stdin: string | null = null,
-  flags: Record<string, boolean> = {},
+  flags: Record<string, boolean | string[]> = {},
+  argv: string[] = [],
+  statOf: (p: PathSpec) => Promise<FileStat> = stat,
 ): Promise<[string, string, number]> {
   const opts = {
     flags,
+    argv,
     stdin: stdin === null ? null : ENC.encode(stdin),
   } as unknown as CommandOpts
-  const [out, io] = await diffGeneric(paths, opts, read, readdir, stat)
+  const [out, io] = await diffGeneric(paths, opts, read, readdir, statOf)
   return [DEC.decode(await materialize(out)), DEC.decode(await materialize(io.stderr)), io.exitCode]
 }
 
@@ -105,10 +120,75 @@ describe('diffGeneric with stdin', () => {
   })
 
   it('names recursive children under the typed operands', async () => {
-    expect(await run([SUB, SUB2], null, { r: true })).toEqual([
+    expect(await run([SUB, SUB2], null, { recursive: true }, ['-r', 'sub', 'sub2'])).toEqual([
       'diff -r sub/x sub2/x\n1c1\n< 1\n---\n> 2\nOnly in sub2: y\n',
       '',
       1,
     ])
+  })
+
+  it('reads a missing operand as empty under -N', async () => {
+    expect(await run([FILE, MISSING], null, { new_file: true }, [], statOrMissing)).toEqual([
+      '1d0\n< hello\n',
+      '',
+      1,
+    ])
+  })
+
+  it('spares only the first operand under --unidirectional-new-file', async () => {
+    const flags = { unidirectional_new_file: true }
+    expect(await run([MISSING, FILE], null, flags, [], statOrMissing)).toEqual([
+      '0a1\n> hello\n',
+      '',
+      1,
+    ])
+    const [, err, code] = await run([FILE, MISSING], null, flags, [], statOrMissing)
+    expect([err, code]).toEqual(['diff: gone: No such file or directory\n', 2])
+  })
+
+  it('reports both of two missing operands', async () => {
+    const [, err, code] = await run([MISSING, MISSING], null, { new_file: true }, [], statOrMissing)
+    expect([err, code]).toEqual(['diff: gone: No such file or directory\n'.repeat(2), 2])
+  })
+
+  it('diffs one-sided entries against empty under -rN', async () => {
+    const flags = { recursive: true, new_file: true }
+    expect(await run([SUB, SUB2], null, flags, ['-rN', 'sub', 'sub2'])).toEqual([
+      'diff -rN sub/x sub2/x\n1c1\n< 1\n---\n> 2\ndiff -rN sub/y sub2/y\n0a1\n> 3\n',
+      '',
+      1,
+    ])
+  })
+
+  it('drops excluded entries inside the walk', async () => {
+    const flags = { recursive: true, exclude: ['y'] }
+    expect(await run([SUB, SUB2], null, flags, ['-r', '-x', 'y'])).toEqual([
+      'diff -r -x y sub/x sub2/x\n1c1\n< 1\n---\n> 2\n',
+      '',
+      1,
+    ])
+  })
+
+  it('reports identical files under -s and exits 0', async () => {
+    expect(await run([FILE, FILE], null, { report_identical_files: true })).toEqual([
+      'Files a.txt and a.txt are identical\n',
+      '',
+      0,
+    ])
+  })
+
+  it('keeps the option words as typed for the header', () => {
+    expect(switchWords(['-ru', '--exclude', '.git', 'a', 'b', '-x*.log'])).toEqual([
+      '-ru',
+      '--exclude',
+      '.git',
+      '-x*.log',
+    ])
+    expect(switchWords(['--exclude=.git', '-r', 'a', '--', '-b'])).toEqual([
+      '--exclude=.git',
+      '-r',
+      '--',
+    ])
+    expect(switchWords(['-rx', 'pat', '-U', '1', 'a', 'b'])).toEqual(['-rx', 'pat', '-U', '1'])
   })
 })

@@ -12,12 +12,66 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import { materialize } from '../../../../io/types.ts'
+import { concat } from '../../../../io/cachable_iterator.ts'
 import type { FlagView } from '../../../spec/flag_view.ts'
-import type { CLIDoors } from '../../types.ts'
+import type { CLIDoors, CLIVerbFn } from '../../types.ts'
 import { discover, requireWorkTree } from './discover.ts'
-import { NoWorkspaceError } from './errors.ts'
+import { IndexLockError, NoWorkspaceError } from './errors.ts'
+import { configValues } from './fs.ts'
 import { openRepo, type Repo } from './repo.ts'
-import { startPoint } from './util.ts'
+import type { ReadOnlyRefusal, RepoLocation } from './types.ts'
+import { fatal, gitBool, startPoint } from './util.ts'
+import { isErofs } from '../../../../utils/errors.ts'
+import type { CommandFnResult } from '../../../config.ts'
+
+const ENC = new TextEncoder()
+
+// The ambiguity warnings each invocation collects, keyed by the doors `verb`
+// handed it, which are its own.
+const AMBIGUOUS = new WeakMap<CLIDoors, string[]>()
+// The repository each invocation opened, for the refusal a read-only mount
+// gets in git's words.
+const LOCATIONS = new WeakMap<CLIDoors, RepoLocation>()
+
+/** The refusal of every verb whose first write is the index's. */
+export const indexLocked: ReadOnlyRefusal = (_inv, location) =>
+  new IndexLockError(location?.gitdir ?? '.git')
+
+/**
+ * A git verb whose `refname is ambiguous` warnings reach stderr, and whose
+ * refusal by a read-only mount is in git's words.
+ *
+ * git prints the warning where it resolves the name, ahead of anything the verb
+ * says after; each invocation gets doors of its own here, `opened` hands the
+ * repository the list kept for them, and the lines it gathered go in front of
+ * the verb's own stderr. A write a read-only mount turns down fails before
+ * anything is written, so the verb's own refusal stands in for it: git's lock
+ * on the index or on the ref it was about to write.
+ *
+ * @param fn the verb
+ * @param refused the refusal git gives the verb on a read-only filesystem, null
+ *   for a verb that only reads
+ */
+export function verb(fn: CLIVerbFn, refused: ReadOnlyRefusal | null = null): CLIVerbFn {
+  return async (inv) => {
+    if (inv.doors === undefined) return await fn(inv)
+    const doors = { ...inv.doors }
+    const lines: string[] = []
+    AMBIGUOUS.set(doors, lines)
+    let result: CommandFnResult
+    try {
+      result = await fn({ ...inv, doors })
+    } catch (err) {
+      if (refused === null || !isErofs(err)) throw err
+      result = fatal(refused(inv, LOCATIONS.get(doors) ?? null))
+    }
+    if (result === null || lines.length === 0) return result
+    const [out, io] = result
+    io.stderr = concat([ENC.encode(lines.join('')), await materialize(io.stderr)])
+    return [out, io]
+  }
+}
 
 /**
  * Discover and open the repository a verb was invoked against.
@@ -50,6 +104,12 @@ export async function opened(fl: FlagView, doors: CLIDoors, workTree = false): P
     fl.asStr('git_dir'),
     chosen,
   )
+  LOCATIONS.set(doors, location)
   if (workTree) await requireWorkTree(dispatch, statPath, location, chosen !== undefined)
-  return openRepo(dispatch, location)
+  const warn = gitBool(
+    await configValues(dispatch, location, 'core.warnAmbiguousRefs'),
+    'core.warnambiguousrefs',
+    true,
+  )
+  return openRepo(dispatch, location, warn ? (AMBIGUOUS.get(doors) ?? null) : null)
 }
