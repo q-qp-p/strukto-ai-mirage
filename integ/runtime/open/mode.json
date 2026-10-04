@@ -1,0 +1,67 @@
+{
+  "cases": [
+    {
+      "id": "refuses_a_malformed_mode",
+      "note": "qjs-libc checks a mode word character by character, so the real engine (quickjs on the python host) opens 'rr'. The TypeScript shim parses modes with the shared parser, which also holds CPython's one-base rule and refuses it.",
+      "runtimes": [
+        "monty",
+        "wasi",
+        "pyodide",
+        "quickjs"
+      ],
+      "world": {
+        "mounts": {
+          "/data": {
+            "vfs": "ram",
+            "files": {
+              "seed.txt": "seed\n",
+              "sub/inner.txt": "in\n"
+            }
+          }
+        }
+      },
+      "steps": [
+        {
+          "program": {
+            "python": "open('/data/seed.txt', 'rr')",
+            "js": "std.open('/data/seed.txt', 'rr')"
+          },
+          "expect": {
+            "exit": 1,
+            "stderr_contains": "invalid mode: 'rr'"
+          },
+          "expect_on": {
+            "monty": {
+              "stderr_contains": "must have exactly one of create/read/write/append mode"
+            },
+            "quickjs": {
+              "stderr_contains": "invalid file mode"
+            },
+            "quickjs@python": {
+              "exit": 0,
+              "stderr_contains": ""
+            }
+          }
+        },
+        {
+          "program": {
+            "python": "open('/data/seed.txt', 'rq')",
+            "js": "std.open('/data/seed.txt', 'rq')"
+          },
+          "expect": {
+            "exit": 1,
+            "stderr_contains": "invalid mode: 'rq'"
+          },
+          "expect_on": {
+            "monty": {
+              "stderr_contains": "invalid mode: 'q'"
+            },
+            "quickjs": {
+              "stderr_contains": "invalid file mode"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

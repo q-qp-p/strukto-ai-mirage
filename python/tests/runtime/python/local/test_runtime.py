@@ -27,14 +27,14 @@ from mirage.runtime.types import RunArgs
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "operation, expected",
+    "program, expected",
     [
-        ("list", "seed.txt\nsub\n"),
-        ("stat", "file 5 32768\ndir 16384\nmissing\n"),
-        ("glob", "seed.txt\nsub/inner.txt\n"),
+        ("dir/py/list.py", "seed.txt\nsub\n"),
+        ("path/py/stat.py", "file 5 32768\ndir 16384\nmissing\n"),
+        ("dir/py/glob.py", "seed.txt\nsub/inner.txt\n"),
     ],
 )
-async def test_filesystem_operations(tmp_path, operation, expected):
+async def test_filesystem_operations(tmp_path, program, expected):
     (tmp_path / "seed.txt").write_text("seed\n")
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "inner.txt").write_text("inner\n")
@@ -43,9 +43,7 @@ async def test_filesystem_operations(tmp_path, operation, expected):
         / "integ"
         / "fixtures"
         / "runtime"
-        / "fs"
-        / "py"
-        / f"{operation}.py"
+        / program
     )
     runtime = LocalRuntime()
     try:
