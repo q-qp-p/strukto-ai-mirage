@@ -593,19 +593,18 @@ class Workspace:
 
         Every caller in the process shares it, so a file the agent read
         through one is guarded when it writes through another. Closing
-        the session drops it. The default session's table follows the
-        default as it is when each call runs, so it keeps working when a
-        snapshot load or an attach re-keys the default.
+        the session drops it. None is the default session as it is when
+        each call runs, so its table keeps working when a snapshot load
+        or an attach re-keys the default; an id stays that session.
 
         Args:
-            session_id (str | None): the session; None or the default's
-                id is the default session.
+            session_id (str | None): the session, or None for the
+                default.
         """
-        key = None if session_id == self.default_session_id else session_id
-        tools = self._tools.get(key)
+        tools = self._tools.get(session_id)
         if tools is None:
-            tools = MirageToolOperations(Session(self, key))
-            self._tools[key] = tools
+            tools = MirageToolOperations(Session(self, session_id))
+            self._tools[session_id] = tools
         return tools
 
     @property

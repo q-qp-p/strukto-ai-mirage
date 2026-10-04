@@ -157,7 +157,7 @@ describe('session tools', () => {
     const agent = await ws.session('agent')
     const other = await ws.session('other')
     expect(agent.tools).toBe(new Session(ws, 'agent').tools)
-    expect(ws.tools).toBe(new Session(ws, ws.defaultSessionId).tools)
+    expect(ws.tools).toBe(new Session(ws, null).tools)
     await agent.tools.call('read', { path: '/a.txt' })
     const written = await new Session(ws, 'agent').tools.call('write', {
       path: '/a.txt',
@@ -203,5 +203,31 @@ describe('session tools', () => {
     expect(ws.defaultSessionId).toBe(source.defaultSessionId)
     expect(read.isError, read.content[0]?.text).toBeUndefined()
     expect(ws.tools).toBe(tools)
+  })
+
+  it('keeps an explicit default id on its session after a restore', async () => {
+    const source = await plain()
+    const state = await toStateDict(source)
+    const ws = new Workspace(
+      { '/': new RAMVFS() },
+      { mode: MountMode.WRITE, shellParser: await getTestParser() },
+    )
+    open.push(ws)
+    const pinned = new Session(ws, ws.defaultSessionId).tools
+    expect(pinned).not.toBe(ws.tools)
+    await applyStateDict(ws, state)
+    await expect(pinned.call('read', { path: '/a.txt' })).rejects.toThrow('unknown session')
+  })
+
+  it('starts a restored default with no read history', async () => {
+    const source = await plain()
+    const state = await toStateDict(source)
+    const ws = await plain()
+    const tools = ws.tools
+    await tools.call('read', { path: '/a.txt' })
+    await applyStateDict(ws, state)
+    const refused = await tools.call('write', { path: '/a.txt', content: 'two\n' })
+    expect(refused.isError).toBe(true)
+    expect(refused.content[0]?.text).toContain('read all of it')
   })
 })

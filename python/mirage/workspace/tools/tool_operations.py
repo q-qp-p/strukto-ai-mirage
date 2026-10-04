@@ -122,8 +122,16 @@ class MirageToolOperations:
         self, session: "Session", stale_write_protection: bool = True
     ) -> None:
         self._session = session
+        self._stale_write_protection = stale_write_protection
         self._versions = FileVersionTracker(
             session.vfs, stale_write_protection
+        )
+
+    def _forget_reads(self) -> None:
+        """Start the read history over, for a table that follows the
+        default session when a restore puts another session there."""
+        self._versions = FileVersionTracker(
+            self._session.vfs, self._stale_write_protection
         )
 
     async def shell(self, command: str) -> ToolResult:

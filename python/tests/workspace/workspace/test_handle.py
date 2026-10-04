@@ -147,7 +147,7 @@ async def test_a_session_has_one_tool_table_every_caller_shares():
     other = await ws.session("other")
     try:
         assert agent.tools is Session(ws, "agent").tools
-        assert ws.tools is Session(ws, ws.default_session_id).tools
+        assert ws.tools is Session(ws, None).tools
         await agent.tools.call("read", {"path": "/a.txt"})
         written = await Session(ws, "agent").tools.call(
             "write", {"path": "/a.txt", "content": "two\n"}
@@ -215,3 +215,45 @@ async def test_the_default_tool_table_follows_a_restored_default():
     assert ws.default_session_id == restored
     assert not read.is_error, read.text
     assert ws.tools is tools
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_default_id_keeps_its_session_after_a_restore():
+    source = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await source.shell("echo one > /a.txt")
+    buf = io.BytesIO()
+    await source.snapshot(buf)
+    await source.close()
+    buf.seek(0)
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    pinned = Session(ws, ws.default_session_id).tools
+    try:
+        assert pinned is not ws.tools
+        await apply_state_dict(ws, read_tar(buf))
+        with pytest.raises(KeyError):
+            await pinned.call("read", {"path": "/a.txt"})
+    finally:
+        await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_a_restored_default_starts_with_no_read_history():
+    source = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await source.shell("echo one > /a.txt")
+    buf = io.BytesIO()
+    await source.snapshot(buf)
+    await source.close()
+    buf.seek(0)
+    ws = Workspace({"/": RAMVFS()}, mode=MountMode.WRITE)
+    await ws.shell("echo one > /a.txt")
+    tools = ws.tools
+    try:
+        await tools.call("read", {"path": "/a.txt"})
+        await apply_state_dict(ws, read_tar(buf))
+        refused = await tools.call(
+            "write", {"path": "/a.txt", "content": "two\n"}
+        )
+    finally:
+        await ws.close()
+    assert refused.is_error
+    assert "read all of it" in refused.text

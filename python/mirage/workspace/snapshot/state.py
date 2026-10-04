@@ -579,8 +579,12 @@ async def _restore_sessions(
     if default_sid is not None:
         # The snapshot's default session identity wins over the live
         # one, and the discovery record's pointer follows it.
+        rekeyed = default_sid != ws.default_session_id
         ws._session_mgr.adopt_default(default_sid)
         ws._default_session_id = default_sid
+        tools = ws._tools.get(None)
+        if rekeyed and tools is not None:
+            tools._forget_reads()
         await ws._state_store.replace_meta(
             ws._workspace_id,
             {

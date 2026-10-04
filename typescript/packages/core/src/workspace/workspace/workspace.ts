@@ -861,18 +861,17 @@ export class Workspace {
    * The one tool table a session has, made on first use. Every caller in
    * the process shares it, so a file the agent read through one is
    * guarded when it writes through another. Closing the session drops it.
-   * The default session's table follows the default as it is when each
-   * call runs, so it keeps working when a snapshot load or an attach
-   * re-keys the default; null or the default's id names it.
+   * Null is the default session as it is when each call runs, so its
+   * table keeps working when a snapshot load or an attach re-keys the
+   * default; an id stays that session.
    *
    * @internal `Session.tools` is the door.
    */
   sessionTools(sessionId: string | null): MirageToolOperations {
-    const key = sessionId === this.defaultSessionId ? null : sessionId
-    let tools = this.toolTables.get(key)
+    let tools = this.toolTables.get(sessionId)
     if (tools === undefined) {
-      tools = new MirageToolOperations(new Session(this, key))
-      this.toolTables.set(key, tools)
+      tools = new MirageToolOperations(new Session(this, sessionId))
+      this.toolTables.set(sessionId, tools)
     }
     return tools
   }
@@ -1107,7 +1106,9 @@ export class Workspace {
    * point the discovery record at it.
    */
   async adoptDefaultSession(sessionId: string): Promise<void> {
+    const rekeyed = sessionId !== this.defaultSessionId
     await this.meta.adoptDefault(sessionId)
+    if (rekeyed) this.toolTables.get(null)?.forgetReads()
   }
 
   /** This workspace's metadata record (discovery surface). */

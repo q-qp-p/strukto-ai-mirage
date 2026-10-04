@@ -77,7 +77,7 @@ function errorMessage(error: unknown): string {
  * Build one directly only to turn the guard off.
  */
 export class MirageToolOperations {
-  private readonly versions: FileVersionTracker
+  private versions: FileVersionTracker
 
   /**
    * @param session The session the tools act as, with its cwd,
@@ -87,9 +87,19 @@ export class MirageToolOperations {
    */
   constructor(
     private readonly session: Session,
-    staleWriteProtection = true,
+    private readonly staleWriteProtection = true,
   ) {
     this.versions = new FileVersionTracker(session.vfs, staleWriteProtection)
+  }
+
+  /**
+   * Start the read history over, for a table that follows the default
+   * session when a restore puts another session there.
+   *
+   * @internal
+   */
+  forgetReads(): void {
+    this.versions = new FileVersionTracker(this.session.vfs, this.staleWriteProtection)
   }
 
   private lineOptions(signal: AbortSignal | undefined): SessionExecuteOptions {
