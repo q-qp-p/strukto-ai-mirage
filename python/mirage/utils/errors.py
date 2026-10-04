@@ -493,6 +493,7 @@ FAILURE_WORDING: dict[str, tuple[str | None, str | None]] = {
     "csplit": (_CANNOT_OPEN, None),
     "fmt": (_CANNOT_OPEN, None),
     "head": (_CANNOT_OPEN, "error reading {quoted}: {strerror}"),
+    "rev": ("cannot open {bare}: {strerror}", None),
     "sed": (
         "can't read {bare}: {strerror}",
         "read error on {bare}: {strerror}",

@@ -146,7 +146,7 @@ async def test_registry_seeds_the_mount_root_policy():
         _ctx("rm", [_path("/data")], registry)
     )
     assert deny is not None
-    assert "Device or resource busy" in deny.reason
+    assert "cannot remove '/data'" in deny.reason
 
 
 @pytest.mark.asyncio
@@ -156,7 +156,7 @@ async def test_builtin_runs_first_then_user_policies_in_order():
     # Both match `rm /data`; the built-in GNU message wins by order.
     deny = await policies.pre_command(_ctx("rm", [_path("/data")]))
     assert deny is not None
-    assert "Device or resource busy" in deny.reason
+    assert "Is a directory" in deny.reason
     # Only the user rule matches `rm /data/x`.
     deny = await policies.pre_command(_ctx("rm", [_path("/data/x")]))
     assert deny is not None

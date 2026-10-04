@@ -1,0 +1,54 @@
+{
+  "cases": [
+    {
+      "id": "r_plus_refuses_a_missing_file",
+      "runtimes": [
+        "monty",
+        "wasi",
+        "pyodide",
+        "quickjs"
+      ],
+      "backends": [
+        "ram",
+        "s3",
+        "redis"
+      ],
+      "world": {
+        "mounts": {
+          "/data": {
+            "vfs": "ram",
+            "files": {
+              "seed.txt": "seed\n",
+              "sub/inner.txt": "in\n"
+            }
+          }
+        }
+      },
+      "steps": [
+        {
+          "program": {
+            "python": "try:\n    open('/data/nope.txt', 'r+').close()\n    print('opened')\nexcept OSError as e:\n    print(type(e).__name__)",
+            "js": "const f = std.open('/data/nope.txt', 'r+')\nif (f !== null) f.close()\nconsole.log(f === null ? 'refused' : 'opened')"
+          },
+          "expect": {
+            "exit": 0,
+            "stdout": "FileNotFoundError\n",
+            "ops_absent": [
+              "create /data/nope.txt"
+            ]
+          },
+          "expect_on": {
+            "quickjs": {
+              "stdout": "refused\n"
+            },
+            "monty": {
+              "exit": 1,
+              "stdout": "",
+              "stderr_contains": "update modes ('+') are not yet supported"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

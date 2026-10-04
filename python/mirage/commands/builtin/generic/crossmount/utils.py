@@ -95,7 +95,6 @@ async def run_operands(
     scopes: list[PathSpec],
     texts: list[str],
     flag_kwargs: dict[str, FlagValue],
-    stdin_bytes: bytes | None = None,
     stop_at_success: bool = False,
 ) -> list[OperandRun]:
     """Run one native single-mount command per operand, in operand order.
@@ -110,15 +109,12 @@ async def run_operands(
         scopes (list[PathSpec]): Path operands in command-line order.
         texts (list[str]): Positional text operands shared by every run.
         flag_kwargs (dict): Flags shared by every run.
-        stdin_bytes (bytes | None): Stdin re-fed to every run (tee).
         stop_at_success (bool): run no operand after one that exits 0,
             which is how grep -q and rg -q stop at their first match.
     """
     results: list[OperandRun] = []
     for scope in scopes:
-        out, io = await run_single(
-            cmd_name, [scope], texts, flag_kwargs, stdin=stdin_bytes
-        )
+        out, io = await run_single(cmd_name, [scope], texts, flag_kwargs)
         try:
             data = await materialize(out) if out is not None else b""
         except FS_ERRORS as exc:

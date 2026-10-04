@@ -1,0 +1,43 @@
+{
+  "cases": [
+    {
+      "id": "rg_a_prints_a_nul_line_raw",
+      "seq": 15200141,
+      "targets": [
+        "ram",
+        "disk",
+        "redis",
+        "opfs",
+        "s3",
+        "databricks",
+        "gridfs",
+        "s3-prefix",
+        "databricks-prefix",
+        "gridfs-prefix",
+        "dropbox",
+        "dropbox-root",
+        "onedrive",
+        "sharepoint",
+        "sharepoint-prefix",
+        "ssh",
+        "nextcloud",
+        "box"
+      ],
+      "command": "printf 'needle\\000tail\\n' > /data/fcB_nul.txt; rg -a needle /data/fcB_nul.txt | od -An -tx1; rg --text -c needle /data/fcB_nul.txt; rg -c needle /data/fcB_nul.txt; rg -l needle /data/fcB_nul.txt; rg --binary --no-binary -c needle /data/fcB_nul.txt; rg -a --no-text -l needle /data/fcB_nul.txt; rm -f /data/fcB_nul.txt",
+      "expect": {
+        "exit": 0,
+        "stdout": " 6e 65 65 64 6c 65 00 74 61 69 6c 0a\n1\n1\n/data/fcB_nul.txt\n1\n/data/fcB_nul.txt\n",
+        "stderr": ""
+      },
+      "flags": [
+        "a",
+        "text",
+        "no_text",
+        "binary",
+        "no_binary",
+        "c",
+        "l"
+      ]
+    }
+  ]
+}

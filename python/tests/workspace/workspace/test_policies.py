@@ -266,6 +266,30 @@ async def test_post_ops_deny_still_records_the_completed_write():
         await ws.close()
 
 
+class SuppressCapacity(Policy):
+    async def post_ops(self, ctx: OpsResultContext) -> Action | None:
+        if ctx.op == "statfs":
+            return Deny("no capacity")
+        return None
+
+
+@pytest.mark.asyncio
+async def test_post_ops_deny_suppresses_a_capacity_reply():
+    ws = Workspace({"/data/": RAMVFS()}, mode=MountMode.WRITE)
+    try:
+        await ws.shell("touch /data/f")
+        ws.policies.add(SuppressCapacity())
+        result = await ws.shell("stat -f -c %b /data/f")
+        assert result.exit_code == 1
+        assert await result.materialize_stdout() == b""
+        assert await result.stderr_str() == (
+            "stat: cannot read file system information for '/data/f': "
+            "Permission denied\n"
+        )
+    finally:
+        await ws.close()
+
+
 class SuppressProdReads(Policy):
     async def post_ops(self, ctx: OpsResultContext) -> Action | None:
         if not ctx.write and ctx.path.virtual.startswith("/data/prod/"):

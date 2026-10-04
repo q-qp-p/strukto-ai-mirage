@@ -13,6 +13,7 @@
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import { specOf } from '../../spec/builtins.ts'
+import { OPERAND } from '../../spec/constants.ts'
 import { FlagView } from '../../spec/flag_view.ts'
 import { mountPrefixOf } from '../../../utils/key_prefix.ts'
 import { ensureDir, extractDest, type StatDoor } from './archive/extract.ts'
@@ -71,10 +72,54 @@ const CORRUPT_EXIT = 3
 // before the archive (a self-extractor stub) push it later, and Info-ZIP
 // reports the difference as a warning (exit 1) and carries on with every
 // offset shifted, or as an error (exit 2) when bytes are missing instead.
-// Info-ZIP prints this on stdout under -t and between the header and the
-// rows under -Z; mirage keeps every diagnostic on stderr.
+// Info-ZIP prints this on stdout under -t, after the archive line, and
+// between the header and the rows under -Z, where mirage keeps it on stderr.
 const WARN_EXIT = 1
 const MISSING_EXIT = 2
+// What -t says when every member it tested was sound: the whole archive, or
+// the members a pattern chose (Info-ZIP 6.00).
+const TESTED_ALL = (archive: string): string =>
+  `No errors detected in compressed data of ${archive}.\n`
+const TESTED_SOME = (archive: string, count: number): string =>
+  `No errors detected in ${archive} for the ${String(count)} file${count === 1 ? '' : 's'} tested.\n`
+const TESTING = (name: string): string => `    testing: ${name.padEnd(22)}   OK\n`
+// A -d in a mode that writes nothing (Info-ZIP 6.00).
+const D_IGNORED = 'caution:  not extracting; -d ignored\n'
+
+/**
+ * The member patterns and the -x patterns, as Info-ZIP reads them: -x takes
+ * every operand typed after it, up to a -d, so the operands are placed by
+ * where the flag tape recorded them; the first is the archive. A line whose
+ * operands the tape does not account for keeps one pattern per -x. Mirrors
+ * Python's _patterns.
+ */
+function patterns(
+  fl: FlagView,
+  texts: readonly string[],
+  excludes: readonly string[],
+): [string[], string[]] {
+  const tape = fl.occurrences('x', 'd', OPERAND)
+  if (tape.filter(([name]) => name === OPERAND).length !== texts.length + 1) {
+    return [[...texts], [...excludes]]
+  }
+  const members: string[] = []
+  const excluded: string[] = []
+  let listing = false
+  let index = -1
+  for (const [name, value] of tape) {
+    if (name === OPERAND) {
+      const word = texts[index]
+      if (index >= 0 && word !== undefined) (listing ? excluded : members).push(word)
+      index += 1
+    } else if (name === 'x' && typeof value === 'string') {
+      excluded.push(value)
+      listing = true
+    } else if (name === 'd') {
+      listing = false
+    }
+  }
+  return [members, excluded]
+}
 
 function slackWarning(slack: number, archive: string): [string, number] {
   if (slack < 0) {
@@ -423,7 +468,7 @@ export async function unzipGeneric(
   const short = fl.asBool('s')
   const medium = fl.asBool('m')
   const header = fl.asBool('h')
-  const excludes = fl.asList('x')
+  const [chosen, excludes] = patterns(fl, members, fl.asList('x'))
   if (!zipinfoMode) {
     const zipinfoOnly: [string, boolean][] = [
       ['-1', namesOnly],
@@ -459,12 +504,13 @@ export async function unzipGeneric(
     ;({ entries, count, slack, comment } = readZipEntries(data))
   } catch (err) {
     if (err instanceof ZipFormatError) {
-      return [null, refusal(err.fault, archivePath.virtual, zipinfoMode, pipeMode)]
+      return [null, refusal(err.fault, archivePath.rawPath, zipinfoMode, pipeMode)]
     }
     throw err
   }
-  const { selected, unmatched, unmatchedExcludes } = selectEntries(entries, members, excludes)
-  const filtered = members.length > 0 || excludes.length > 0
+  const { selected, unmatched, unmatchedExcludes } = selectEntries(entries, chosen, excludes)
+  const filtered = chosen.length > 0 || excludes.length > 0
+  const [warning, floor] = slack !== 0 ? slackWarning(slack, archivePath.rawPath) : ['', 0]
   // Every pattern, member or -x, that matched nothing is reported, and a
   // filter that leaves nothing exits 11 in every mode.
   const nothingLeft = filtered && selected.length === 0
@@ -526,19 +572,23 @@ export async function unzipGeneric(
     }
 
     if (testMode) {
-      // GNU -t reports unmatched patterns on stdout; an unmatched member
-      // counts as an error, an unmatched exclude does not, and a filter
-      // that leaves nothing is its own caution.
+      // GNU -t heads its report with the archive as typed and reports
+      // unmatched patterns on stdout; an unmatched member counts as an
+      // error, an unmatched exclude does not, and a filter that leaves
+      // nothing is its own caution.
+      const shown = archivePath.rawPath
+      const head = (quiet ? '' : `Archive:  ${shown}\n`) + warning
       if (unmatched.length > 0) {
-        const msg = cautions + `At least one error was detected in ${archivePath.virtual}.\n`
+        const msg = head + cautions + `At least one error was detected in ${shown}.\n`
         return [ENC.encode(msg), new IOResult({ exitCode: 11 })]
       }
       if (nothingLeft) {
-        const msg = cautions + `Caution:  zero files tested in ${archivePath.virtual}.\n`
+        const msg = head + cautions + `Caution:  zero files tested in ${shown}.\n`
         return [ENC.encode(msg), new IOResult({ exitCode: 11 })]
       }
-      const msg = cautions + `No errors detected in ${archivePath.virtual}\n`
-      const out: ByteSource = ENC.encode(msg)
+      const tested = quiet ? '' : selected.map((e) => TESTING(e.name)).join('')
+      const tail = filtered ? TESTED_SOME(shown, selected.length) : TESTED_ALL(shown)
+      const out: ByteSource = ENC.encode(head + tested + cautions + tail)
       return [out, new IOResult()]
     }
 
@@ -645,15 +695,24 @@ export async function unzipGeneric(
   }
 
   const result = await run()
-  if (slack === 0 || result === null) return result
+  // A mode that writes nothing says so about -d first; -t prints the
+  // offset warning on stdout, every other mode on stderr.
+  const writesNothing = zipinfoMode || testMode || pipeMode || listMode || verbose
+  const caution = fl.asStr('d') !== undefined && writesNothing ? D_IGNORED : ''
+  const onStderr = testMode && !zipinfoMode ? '' : warning
+  if ((caution === '' && onStderr === '' && slack === 0) || result === null) return result
   const [out, io] = result
-  const [warning, floor] = slackWarning(slack, archivePath.virtual)
+  const lead = ENC.encode(caution + onStderr)
   const rest = io.stderr instanceof Uint8Array ? io.stderr : new Uint8Array()
-  const merged = new Uint8Array(ENC.encode(warning).byteLength + rest.byteLength)
-  merged.set(ENC.encode(warning), 0)
-  merged.set(rest, ENC.encode(warning).byteLength)
+  const merged = new Uint8Array(lead.byteLength + rest.byteLength)
+  merged.set(lead, 0)
+  merged.set(rest, lead.byteLength)
   return [
     out,
-    new IOResult({ exitCode: Math.max(io.exitCode, floor), stderr: merged, writes: io.writes }),
+    new IOResult({
+      exitCode: Math.max(io.exitCode, floor),
+      stderr: merged.byteLength > 0 ? merged : null,
+      writes: io.writes,
+    }),
   ]
 }

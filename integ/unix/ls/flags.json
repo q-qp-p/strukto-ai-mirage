@@ -605,12 +605,7 @@
         "stdout": "-rw-r--r-- 1 5 x /data/lsf/a.txt\n-rw-r--r-- 1 5 x /data/lsf/a.txt\n",
         "stderr": ""
       },
-      "flags": [
-        "g",
-        "o",
-        "u",
-        "time-style"
-      ]
+      "flags": ["g", "o", "u", "time-style", "c"]
     },
     {
       "id": "ls_n_prints_the_ids_as_they_are",

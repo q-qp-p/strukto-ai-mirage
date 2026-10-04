@@ -12,9 +12,12 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import { UsageError } from '../../errors.ts'
 import { specOf } from '../../spec/builtins.ts'
 import { FlagView } from '../../spec/flag_view.ts'
+import { usageExitCode, usageHint } from '../../spec/usage.ts'
 import { mountKey, mountPrefixOf } from '../../../utils/key_prefix.ts'
+import { ensureStream } from '../../../io/stream.ts'
 import { IOResult, materialize, type ByteSource } from '../../../io/types.ts'
 import { PathSpec } from '../../../types.ts'
 import type { CommandFnResult, CommandOpts } from '../../config.ts'
@@ -49,22 +52,61 @@ function algorithmName(name: string): string {
   return name.slice(0, -3).toUpperCase()
 }
 
+// The last of -b, -t and --tag (which reads in binary mode), as GNU's option
+// loop leaves its one mode.
+function readMode(fl: FlagView): string | undefined {
+  return fl.typedOrder('binary', 'text', 'tag').at(-1)
+}
+
+// The options GNU refuses outside --check, in the order it checks them.
+const CHECK_ONLY: readonly (readonly [string, string])[] = [
+  ['ignore_missing', '--ignore-missing'],
+  ['status', '--status'],
+  ['warn', '--warn'],
+  ['quiet', '--quiet'],
+  ['strict', '--strict'],
+]
+
+// Refuse the combinations GNU refuses after its option loop, in its order
+// (coreutils 9.7 digest.c).
+function refuseConflicts(fl: FlagView, name: string): void {
+  const refuse = (message: string): UsageError =>
+    new UsageError(`${name}: ${message}\n${usageHint(name)}`, usageExitCode(name))
+  const mode = readMode(fl)
+  const check = fl.asBool('check')
+  const tag = fl.asBool('tag')
+  if (tag && mode === 'text') throw refuse('--tag does not support --text mode')
+  if (check && fl.asBool('zero')) {
+    throw refuse('the --zero option is not supported when verifying checksums')
+  }
+  if (check && tag) throw refuse('the --tag option is meaningless when verifying checksums')
+  if (check && mode !== undefined) {
+    throw refuse('the --binary and --text options are meaningless when verifying checksums')
+  }
+  for (const [flag, word] of CHECK_ONLY) {
+    if (!check && fl.asBool(flag)) {
+      throw refuse(`the ${word} option is meaningful only when verifying checksums`)
+    }
+  }
+}
+
 function hashLine(digest: string, label: string, name: string, opts: CommandOpts): string {
   const fl = new FlagView(opts.flags, specOf(name))
   const terminator = fl.asBool('zero') ? '\0' : '\n'
   if (fl.asBool('tag')) {
     return `${algorithmName(name)} (${label}) = ${digest}${terminator}`
   }
-  const marker = fl.asBool('binary') ? '*' : ' '
+  const marker = readMode(fl) === 'binary' ? '*' : ' '
   return `${digest} ${marker}${label}${terminator}`
 }
 
-function makePathSpec(virtual: string, mountPrefix: string): PathSpec {
+function makePathSpec(virtual: string, mountPrefix: string, rawPath: string): PathSpec {
   return new PathSpec({
     virtual,
     directory: virtual,
     vfsPath: mountKey(virtual, mountPrefix),
     resolved: true,
+    rawPath,
   })
 }
 
@@ -72,11 +114,26 @@ function makePathSpec(virtual: string, mountPrefix: string): PathSpec {
 // resolves it against the process cwd (a relative `f.txt` in the sums
 // file names a sibling of wherever `-c` runs, not of the sums file).
 function checkTarget(filename: string, cwd: string, mountPrefix: string): PathSpec {
-  return makePathSpec(resolvePath(filename, cwd), mountPrefix)
+  return makePathSpec(resolvePath(filename, cwd), mountPrefix, filename)
 }
 
 function countNoun(count: number, singular: string, plural: string): string {
   return count === 1 ? singular : `${String(count)} ${plural}`
+}
+
+// Read a path through the workspace's door, on whatever mount holds it: a
+// checksum list names files anywhere, not on the list's mount. A stdin name
+// (`-`, /dev/stdin) reads the command's input through `stream`, on the
+// cursor the list itself reads from. Mirrors Python's door_reader.
+export function doorReader(dispatch: NonNullable<CommandOpts['dispatch']>, stream: Stream): Stream {
+  return async function* read(path: PathSpec): AsyncIterable<Uint8Array> {
+    if (isStdin(path)) {
+      yield* stream(path)
+      return
+    }
+    const [data] = await dispatch('read', path)
+    yield* ensureStream(data as ByteSource)
+  }
 }
 
 async function checkFile(
@@ -88,6 +145,7 @@ async function checkFile(
 ): Promise<[string, string, number]> {
   const fl = new FlagView(opts.flags, specOf(name))
   const data = DEC.decode(await materialize(stream(p)))
+  const listed = opts.dispatch !== undefined ? doorReader(opts.dispatch, stream) : stream
   // A list read from stdin names files on the mount the command runs on.
   const mountPrefix = isStdin(p) ? (opts.mountPrefix ?? '') : mountPrefixOf(p.virtual, p.vfsPath)
   // GNU quotes its stdin name, which holds a space.
@@ -119,7 +177,7 @@ async function checkFile(
     const [expected, filename] = parsed
     let digest: string
     try {
-      digest = await hashStream(stream(checkTarget(filename, opts.cwd, mountPrefix)), hasher)
+      digest = await hashStream(listed(checkTarget(filename, opts.cwd, mountPrefix)), hasher)
     } catch (error) {
       if (!isWalkError(error)) throw error
       // GNU --ignore-missing skips only absence; a permission or
@@ -204,6 +262,7 @@ export async function checksumGeneric(
   name: string,
 ): Promise<CommandFnResult> {
   const fl = new FlagView(opts.flags, specOf(name))
+  refuseConflicts(fl, name)
   const stream = stdinStream(read, opts.stdin)
   if (fl.asBool('check')) {
     let output = ''

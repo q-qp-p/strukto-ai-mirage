@@ -156,7 +156,11 @@ async def write_output(
     named on stderr and the command exits 1. ``Exception`` rather than
     ``BaseException`` keeps cancellation propagating.
 
-    GNU opens every operand up front, so under ``exit`` an *open*
+    An output's open is probed before its write whenever ``stat`` is in
+    hand, since a store would otherwise keep the key over a directory or
+    under a file; a missing parent is the write's to refuse, which a
+    keyed store makes as a redirect does. GNU opens every operand up
+    front, so under ``exit`` an *open*
     failure aborts before any data is written, the outputs opened before
     it left empty. A mount has no open/write split (``write_bytes`` is one
     call), so with ``stat`` in hand the open is probed first: a missing
@@ -227,7 +231,19 @@ async def write_output(
                 writes=writes,
                 cache=cache,
             )
-    for path in paths:
+    for index, path in enumerate(paths):
+        # A store keeps a key over a directory or under a file, where an
+        # open would fail, so the open is probed for every output, not
+        # only the ones --output-error=exit probed above.
+        refusal = None
+        if stat is not None and not parsed.stop_on_error:
+            try:
+                refusal = await open_refusal(stat, path, paths[:index])
+            except Exception as exc:
+                logger.debug("tee: probing %s failed: %s", path.virtual, exc)
+        if refusal is not None and not isinstance(refusal, FileNotFoundError):
+            errors.append(error_line(path, refusal))
+            continue
         try:
             data = await write_one(
                 path, raw, parsed, read_stream, write_bytes, append_bytes

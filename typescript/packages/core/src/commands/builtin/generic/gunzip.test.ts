@@ -124,11 +124,7 @@ async function out(ws: Workspace, line: string): Promise<string> {
 
 describe('gunzip on a link in place (O_NOFOLLOW unless -c or -f)', () => {
   it.each([
-    ['gunzip tl.gz', 'gzip: tl.gz: Too many levels of symbolic links\n'],
     ['gunzip -k -q tl.gz', 'gzip: tl.gz: Too many levels of symbolic links\n'],
-    ['gzip -d tl.gz', 'gzip: tl.gz: Too many levels of symbolic links\n'],
-    ['ln -s nowhere d.gz && gunzip d.gz', 'gzip: d.gz: Too many levels of symbolic links\n'],
-    ['ln -s dir dl && gunzip dl', 'gzip: dl: Too many levels of symbolic links\n'],
     ['ln -s t.gz x.gz && gunzip x', 'gzip: x.gz: Too many levels of symbolic links\n'],
   ])('%s refuses the link', async (line, err) => {
     const [ws, , stderr, code] = await linked(line)

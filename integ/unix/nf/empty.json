@@ -299,7 +299,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "rg -c o /data/a.txt ''",
+      "command": "rg -j1 -c o /data/a.txt ''",
       "expect": {
         "exit": 2,
         "stdout": "/data/a.txt:3\n",
@@ -333,7 +333,7 @@
         "gdrive-folder",
         "box"
       ],
-      "command": "(cd /data && rg o '' '')",
+      "command": "(cd /data && rg -j1 o '' '')",
       "expect": {
         "exit": 2,
         "stdout": "",

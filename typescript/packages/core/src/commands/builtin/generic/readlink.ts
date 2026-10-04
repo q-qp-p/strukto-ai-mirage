@@ -45,8 +45,11 @@ export function readlinkGeneric(
 ): CommandFnResult {
   if (paths.length === 0) throw missingOperandError('readlink', null)
   const fl = new FlagView(opts.flags, specOf('readlink'))
-  const normalize = fl.asBool('f') || fl.asBool('e') || fl.asBool('m')
-  const noNewline = fl.asBool('n')
+  const normalize =
+    fl.asBool('canonicalize') ||
+    fl.asBool('canonicalize_existing') ||
+    fl.asBool('canonicalize_missing')
+  const noNewline = fl.asBool('no_newline')
   const results: string[] = []
   for (const p of paths) {
     let vp =

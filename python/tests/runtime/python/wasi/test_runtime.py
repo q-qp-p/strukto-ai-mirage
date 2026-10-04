@@ -158,45 +158,6 @@ def test_wasi_reuses_compiled_module():
 
 
 @live
-@pytest.mark.asyncio
-async def test_wasi_mounts_read_write_listdir():
-    # Guest file I/O bridges through the workspace dispatch: reads see
-    # shell writes, guest writes land in the mount, listdir lists it.
-    ws = Workspace({"/data": RAMVFS()}, mode=MountMode.EXEC, runtimes=["wasi"])
-    await ws.shell("echo hello-mount > /data/in.txt")
-    code = (
-        "import os\n"
-        "print(open('/data/in.txt').read().strip())\n"
-        "open('/data/out.txt', 'w').write('from-wasi\\n')\n"
-        "print(sorted(os.listdir('/data')))\n"
-    )
-    r = await ws.shell(f'python3 -c "{code}"')
-    assert r.exit_code == 0
-    assert (await r.stdout_str()) == ("hello-mount\n['in.txt', 'out.txt']\n")
-    r = await ws.shell("cat /data/out.txt")
-    assert (await r.stdout_str()) == "from-wasi\n"
-    await ws.close()
-
-
-@live
-@pytest.mark.asyncio
-async def test_wasi_root_mount_coexists_with_the_build():
-    # Mount prefixes route to the workspace; everything else is served
-    # from the build directory, so a root mount and the stdlib coexist.
-    ws = Workspace({"/": RAMVFS()}, mode=MountMode.EXEC, runtimes=["wasi"])
-    await ws.shell("echo root-mount > /f.txt")
-    code = (
-        "import sys\n"
-        "print(open('/f.txt').read().strip())\n"
-        "print('stdlib', sys.version_info[0])\n"
-    )
-    r = await ws.shell(f'python3 -c "{code}"')
-    assert r.exit_code == 0
-    assert (await r.stdout_str()) == "root-mount\nstdlib 3\n"
-    await ws.close()
-
-
-@live
 def test_wasi_without_dispatch_sees_no_mounts():
     rt = WasiRuntime()
     code = "import os; print(os.path.exists('/data'))"

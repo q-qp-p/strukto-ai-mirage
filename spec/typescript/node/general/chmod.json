@@ -8,15 +8,27 @@
   },
   "options": [
     {
-      "short": "-R",
+      "long": "--changes",
+      "short": "-c",
       "type": "bool"
     },
     {
+      "long": "--silent",
+      "short": "-f",
+      "type": "bool"
+    },
+    {
+      "long": "--quiet",
+      "type": "bool"
+    },
+    {
+      "long": "--verbose",
       "short": "-v",
       "type": "bool"
     },
     {
-      "short": "-f",
+      "long": "--recursive",
+      "short": "-R",
       "type": "bool"
     }
   ],

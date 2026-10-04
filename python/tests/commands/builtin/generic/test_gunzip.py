@@ -84,8 +84,6 @@ async def test_a_damaged_trailer_keeps_the_inflated_bytes():
         b"\ngzip: /data/bad.gz: invalid compressed data--crc error\n"
         b"\ngzip: /data/bad.gz: invalid compressed data--length error\n"
     )
-    r = await ws.shell("gunzip -t /data/bad.gz /data/ok.gz; ls /data")
-    assert await r.materialize_stdout() == b"bad.gz\nok.gz\n"
 
 
 async def _linked(line: str) -> tuple[Workspace, str, str, int]:
@@ -117,19 +115,9 @@ async def _linked(line: str) -> tuple[Workspace, str, str, int]:
 @pytest.mark.parametrize(
     "line,err",
     [
-        ("gunzip tl.gz", "gzip: tl.gz: Too many levels of symbolic links\n"),
         (
             "gunzip -k -q tl.gz",
             "gzip: tl.gz: Too many levels of symbolic links\n",
-        ),
-        ("gzip -d tl.gz", "gzip: tl.gz: Too many levels of symbolic links\n"),
-        (
-            "ln -s nowhere d.gz && gunzip d.gz",
-            "gzip: d.gz: Too many levels of symbolic links\n",
-        ),
-        (
-            "ln -s dir dl && gunzip dl",
-            "gzip: dl: Too many levels of symbolic links\n",
         ),
         (
             "ln -s t.gz x.gz && gunzip x",

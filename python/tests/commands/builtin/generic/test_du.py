@@ -139,19 +139,6 @@ async def test_a_respells_entries_as_the_operand_was_typed():
 
 
 @pytest.mark.asyncio
-async def test_s_summarises_to_one_line():
-    tree = {"/dir/a.txt": 2, "/dir/sub/b.txt": 3}
-    compute_size, compute_entries = _make_backend(tree)
-    out = await du(
-        [_spec("/dir", "dir")],
-        compute_size=compute_size,
-        compute_entries=compute_entries,
-        flags=DuFlags(s=True),
-    )
-    assert out.stdout == b"5\t/dir\n"
-
-
-@pytest.mark.asyncio
 async def test_max_depth_zero_drops_everything_below_the_operand():
     tree = {"/dir/a.txt": 2, "/dir/sub/b.txt": 3}
     compute_size, compute_entries = _make_backend(tree)

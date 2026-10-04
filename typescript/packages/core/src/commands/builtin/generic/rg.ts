@@ -309,7 +309,9 @@ export function parseFlags(fl: FlagView): RgFlags {
   }
   return {
     engine: engineFlag(fl),
-    pcre2Unicode: last(fl, 'pcre2_unicode', 'no_pcre2_unicode') !== 'no_pcre2_unicode',
+    unicode: !['no_unicode', 'no_pcre2_unicode'].includes(
+      last(fl, 'unicode', 'no_unicode', 'pcre2_unicode', 'no_pcre2_unicode') ?? '',
+    ),
     ignoreCase: caseMode === 'ignore_case',
     smartCase: caseMode === 'smart_case',
     invert: last(fl, 'invert_match', 'no_invert_match') === 'invert_match',
@@ -389,13 +391,23 @@ export function rgSyntax(f: RgFlags): RegexSyntax {
 }
 
 /**
- * The regex engine the line asks for, the last of -P, --no-pcre2 and
- * --engine winning (ripgrep 14.1.1: `rg -P --no-pcre2` is the default engine
- * and `rg --no-pcre2 -P` is PCRE2). Throws for an --engine ripgrep lacks.
+ * The regex engine the line asks for, the last of -P, --no-pcre2, --engine
+ * and the deprecated --auto-hybrid-regex pair winning (ripgrep 14.1.1: `rg -P
+ * --no-pcre2` is the default engine, `rg --no-pcre2 -P` is PCRE2, and
+ * --no-auto-hybrid-regex selects the default engine as --auto-hybrid-regex
+ * selects auto). Throws for an --engine ripgrep lacks.
  */
 export function engineFlag(fl: FlagView): string {
-  const chosen = last(fl, 'pcre2', 'no_pcre2', 'engine')
+  const chosen = last(
+    fl,
+    'pcre2',
+    'no_pcre2',
+    'engine',
+    'auto_hybrid_regex',
+    'no_auto_hybrid_regex',
+  )
   if (chosen === 'pcre2') return 'pcre2'
+  if (chosen === 'auto_hybrid_regex') return 'auto'
   if (chosen !== 'engine') return 'default'
   const value = fl.asStr('engine') ?? ''
   if (!ENGINES.includes(value)) {
@@ -408,14 +420,14 @@ export function engineFlag(fl: FlagView): string {
 function rustMatcher(patterns: readonly string[], fold: boolean, f: RgFlags): RegExp {
   let translated
   try {
-    translated = translateRust(patterns, fold, f.nullData)
+    translated = translateRust(patterns, fold, f.nullData, f.unicode)
   } catch (err) {
     if (err instanceof RustRegexError) throw new UsageError(`rg: ${err.message}`)
     throw err
   }
   let source = translated.source
   if (f.lineRegexp) source = wholeLine(source, f.nullData)
-  else if (f.wholeWord) source = wholeWord(source)
+  else if (f.wholeWord) source = wholeWord(source, f.unicode)
   return new RegExp(source, translated.ignoreCase ? 'iu' : 'u')
 }
 
@@ -428,7 +440,7 @@ function pcreMatcher(patterns: readonly string[], fold: boolean, f: RgFlags): Re
   else if (f.wholeWord) display = `(?<!\\w)(?:${display})(?!\\w)`
   let translated
   try {
-    translated = translatePcre(display, f.pcre2Unicode, fold, f.nullData)
+    translated = translatePcre(display, f.unicode, fold, f.nullData)
   } catch (err) {
     if (err instanceof PcreError) {
       throw new UsageError(

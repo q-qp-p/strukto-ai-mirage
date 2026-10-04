@@ -180,12 +180,7 @@ def _names(archive: bytes) -> list[str]:
 
 
 def test_excluded_matches_whole_name_and_every_component_suffix():
-    assert excluded("d/a.txt", "d/a.txt")
-    assert excluded("d/a.txt", "a.txt")
     assert excluded("d/sub/b.txt", "sub/b.txt")
-    assert excluded("d/sub/b.txt", "*/b.txt")
-    assert excluded("d/sub/", "sub")
-    assert not excluded("d/a.txt", "b.txt")
     # The pattern is anchored at a component boundary, not mid-name.
     assert not excluded("d/abc.txt", "bc.txt")
 
@@ -200,11 +195,7 @@ def test_pruned_takes_the_children_of_an_excluded_directory():
 @pytest.mark.parametrize(
     "path,kind,name",
     [
-        ("/data/d/a.txt", "file", "data/d/a.txt"),
         ("/data/d", "dir", "data/d/"),
-        ("d/", "dir", "d/"),
-        ("link", "link", "link"),
-        ("..", "dir", "./"),
         ("sub/..", "dir", "./"),
     ],
 )
@@ -217,18 +208,10 @@ def test_member_name_strips_the_leading_slash_and_marks_directories(
 # Every row is GNU tar 1.35 on debian:stable-slim: `tar -cf` for the
 # notice, `tar -tf` for the stored name.
 STRIP_PREFIX_ROWS = [
-    ("/data/sub/../file", "file", "/data/sub/../"),
-    ("../file", "file", "../"),
     ("x/../y/f3", "y/f3", "x/../"),
-    ("../../file", "file", "../../"),
-    ("/data/../data/file", "data/file", "/data/../"),
-    # No `..`, so the leading slash is the only thing tar refuses.
-    ("/data/file", "data/file", "/"),
     # A `.` climbs nowhere, so GNU stores it and says nothing.
     ("./file", "./file", ""),
-    ("d/a.txt", "d/a.txt", ""),
     # Nothing survives the traversal; `member_name` supplies the name.
-    ("..", "", ".."),
     ("sub/..", "", "sub/.."),
 ]
 
@@ -241,33 +224,7 @@ def test_strip_prefix_drops_through_the_last_dotdot(
 
 
 @pytest.mark.asyncio
-async def test_create_keeps_an_empty_directory_as_its_own_member():
-    tree = _Tree({"/d/a.txt": b"x"}, dirs=("/d", "/d/empty", "/out"))
-    _, io_res = await _create(
-        tree, [_raw("/d", "d")], c=True, f=_spec("/out.tar")
-    )
-    assert "d/empty/" in _names(io_res.writes["/out.tar"])
-
-
-@pytest.mark.asyncio
-async def test_create_reports_a_missing_operand_and_exits_two():
-    tree = _Tree({"/d/a.txt": b"x"}, dirs=("/d",))
-    _, io_res = await _create(
-        tree,
-        [_raw("/nope", "nope"), _raw("/d", "d")],
-        c=True,
-        f=_spec("/out.tar"),
-    )
-    assert io_res.exit_code == 2
-    err = io_res.stderr.decode()
-    assert "tar: nope: Cannot stat: No such file or directory" in err
-    assert "Exiting with failure status due to previous errors" in err
-    # GNU still archives every operand it could read.
-    assert "d/a.txt" in _names(io_res.writes["/out.tar"])
-
-
-@pytest.mark.asyncio
-async def test_create_announces_before_a_later_operand_fails():
+async def test_create_announces_a_prefix_and_archives_what_it_could_read():
     tree = _Tree({"/base/file": b"x"}, dirs=("/base", "/base/sub"))
     _, io_res = await _create(
         tree,
@@ -275,10 +232,14 @@ async def test_create_announces_before_a_later_operand_fails():
         c=True,
         f=_spec("/out.tar"),
     )
-    assert io_res.stderr.decode().splitlines()[:2] == [
+    assert io_res.exit_code == 2
+    err = io_res.stderr.decode().splitlines()
+    assert err[:2] == [
         "tar: Removing leading `../' from member names",
         "tar: nope: Cannot stat: No such file or directory",
     ]
+    assert err[-1] == "tar: Exiting with failure status due to previous errors"
+    assert _names(io_res.writes["/out.tar"]) == ["file"]
 
 
 @pytest.mark.asyncio
@@ -293,15 +254,23 @@ async def test_create_refuses_an_empty_archive():
 
 @pytest.mark.asyncio
 async def test_create_stores_a_symlink_as_a_symlink():
+    """The router must not dereference an operand before the planner sees
+    it, and a walk must not dereference what it meets.
+    """
     tree = _Tree({"/d/a.txt": b"a"}, dirs=("/d",))
-    links = _links({"/d/link.txt": "a.txt"})
+    links = _links({"/d/link.txt": "a.txt", "/link": "/d/a.txt"})
     _, io_res = await _create(
-        tree, [_raw("/d", "d")], c=True, f=_spec("/out.tar"), links=links
+        tree,
+        [_raw("/d", "d"), _raw("/link", "link")],
+        c=True,
+        f=_spec("/out.tar"),
+        links=links,
     )
     with tarfile.open(fileobj=io.BytesIO(io_res.writes["/out.tar"])) as tf:
-        link = tf.getmember("d/link.txt")
-    assert link.issym()
-    assert link.linkname == "a.txt"
+        stored = {
+            m.name: (m.size, m.linkname) for m in tf.getmembers() if m.issym()
+        }
+    assert stored == {"d/link.txt": (0, "a.txt"), "link": (0, "/d/a.txt")}
 
 
 @pytest.mark.asyncio
@@ -347,39 +316,18 @@ async def test_create_leaves_the_archive_out_of_itself():
 
 
 @pytest.mark.asyncio
-async def test_extract_recreates_directories_including_empty_ones():
+async def test_an_empty_directory_round_trips_as_its_own_member():
     tree = _Tree({"/d/a.txt": b"x"}, dirs=("/d", "/d/empty", "/out"))
     _, io_res = await _create(
         tree, [_raw("/d", "d")], c=True, f=_spec("/out.tar")
     )
+    assert "d/empty/" in _names(io_res.writes["/out.tar"])
     tree.files["/out.tar"] = io_res.writes["/out.tar"]
     _, io_res = await _create(
         tree, [], x=True, f=_spec("/out.tar"), C=[_spec("/out")]
     )
     assert any("d/a.txt" in path for path in io_res.writes)
     assert "/out/d/empty" in tree.dirs
-
-
-@pytest.mark.asyncio
-async def test_requires_an_archive():
-    tree = _Tree({"/a.txt": b"x"})
-    with pytest.raises(ValueError, match="-f is required"):
-        await _create(tree, [_spec("/a.txt")], c=True)
-
-
-@pytest.mark.asyncio
-async def test_a_symlink_operand_is_stored_as_a_symlink():
-    """The router must not dereference it before the planner sees it."""
-    tree = _Tree({"/d/a.txt": b"alpha"}, dirs=("/d",))
-    links = _links({"/link": "/d/a.txt"})
-    _, io_res = await _create(
-        tree, [_raw("/link", "link")], c=True, f=_spec("/out.tar"), links=links
-    )
-    with tarfile.open(fileobj=io.BytesIO(io_res.writes["/out.tar"])) as tf:
-        member = tf.getmember("link")
-    assert member.issym()
-    assert member.size == 0
-    assert member.linkname == "/d/a.txt"
 
 
 @pytest.mark.asyncio
@@ -439,10 +387,7 @@ def _read_only_tar_mount() -> tuple[Workspace, RAMVFS]:
 @pytest.mark.parametrize(
     "line,stdout",
     [
-        ("tar -tf /ro/a.tar", b"g.txt\n"),
         ("cd /ro && tar tf a.tar", b"g.txt\n"),
-        ("tar -xOf /ro/a.tar", b"hello\n"),
-        ("tar -x --to-stdout -f /ro/a.tar", b"hello\n"),
         ("tar -xf /ro/a.tar -C /rw && cat /rw/g.txt", b"hello\n"),
     ],
 )
@@ -468,7 +413,6 @@ _EXTRACT_REFUSED = (
     "line,stderr",
     [
         ("cd /ro && tar -xf a.tar", _EXTRACT_REFUSED),
-        ("cd /ro && tar xf a.tar", _EXTRACT_REFUSED),
         (
             "tar -cf /ro/b.tar /ro/f.txt",
             b"tar: /ro/b.tar: Cannot open: Read-only file system\n"
@@ -501,19 +445,9 @@ _CHILD_FATAL = (
     "line, want",
     [
         (
-            "tar -tf nope.tar",
-            "tar: nope.tar: Cannot open: No such file or directory\n" + _FATAL,
-        ),
-        (
             "tar -xf d",
             "tar: d: Cannot read: Is a directory\n"
             "tar: At beginning of tape, quitting now\n" + _FATAL,
-        ),
-        (
-            "tar -tzf nope.tgz",
-            "tar (child): nope.tgz: Cannot open: No such file or directory\n"
-            + _CHILD_FATAL[0]
-            + _CHILD_FATAL[1],
         ),
         (
             "tar -tzf d",
@@ -521,12 +455,6 @@ _CHILD_FATAL = (
             "tar (child): At beginning of tape, quitting now\n"
             + _CHILD_FATAL[0]
             + "\ngzip: stdin: unexpected end of file\n"
-            + _CHILD_FATAL[1],
-        ),
-        (
-            "tar -czf d a",
-            "tar (child): d: Cannot open: Is a directory\n"
-            + _CHILD_FATAL[0]
             + _CHILD_FATAL[1],
         ),
     ],

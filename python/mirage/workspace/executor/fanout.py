@@ -675,7 +675,7 @@ async def _fan_out_traversal(
             dispatch=dispatch,
         )
         stdout, io = await run_fanout(
-            cmd_name, paths, texts, flag_kwargs, run_operand, stdin
+            cmd_name, paths, texts, flag_kwargs, run_operand
         )
         prefixes = dict.fromkeys(
             [

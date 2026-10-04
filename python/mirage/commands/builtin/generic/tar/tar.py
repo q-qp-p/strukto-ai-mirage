@@ -25,6 +25,7 @@ from mirage.commands.builtin.generic.tar.constants import (
     EMPTY_PIPE,
     ERROR_TRAILER,
     FATAL_TRAILER,
+    FOREIGN_INPUT,
     INVALID_ARCHIVE,
     MODE_CONFLICT,
     MULTIPLE_ARCHIVES,
@@ -32,6 +33,7 @@ from mirage.commands.builtin.generic.tar.constants import (
     READ_MODES,
     STRIP_COUNT,
     TAPE_START,
+    UNEXPECTED_EOF,
     USAGE_HINT,
     WRITE_MODES,
 )
@@ -84,16 +86,31 @@ def _stderr(lines: list[str]) -> bytes:
     return ("\n".join(lines) + "\n").encode() if lines else b""
 
 
+class ZeroTail(io.BytesIO):
+    """An archive's whole blocks, then zeros for as far as tar reads.
+
+    GNU tar drops a partial last block and meets the end of the archive
+    where the data stops, so a member whose data ran out reads as zeros
+    and the header after it as the end-of-archive marker.
+    """
+
+    def read(self, size: int | None = -1) -> bytes:
+        got = super().read(size)
+        if size is None or size < 0:
+            return got
+        return got + bytes(size - len(got))
+
+
 @contextmanager
 def _open_archive(
     data: bytes, suffix: CompressionSuffix
 ) -> Iterator[ReadResult]:
     """Open tar's input while preserving its gzip child's failure.
 
-    GNU tar 1.35 reads complete decoded members even when their gzip
-    trailer is damaged or missing. A tar parsing error must not mask the
-    child's diagnostic and exit status. Mirage still discards data when
-    gzip stops inside a deflate body; GNU can recover partial tar entries.
+    GNU tar 1.35 reads whatever gzip decoded before it stopped, whole
+    blocks only, and a tar parsing error must not mask the child's
+    diagnostic and exit status. A member whose data blocks ran out is
+    the ``cut``: GNU reaches it and stops there.
 
     Args:
         data (bytes): the archive file's bytes.
@@ -101,20 +118,51 @@ def _open_archive(
     """
     failure = None
     mode = _read_mode(suffix)
+    foreign = FOREIGN_INPUT.get(suffix)
+    if (
+        foreign is not None
+        and not data.startswith(foreign[0])
+        and (data or foreign[3])
+    ):
+        # The child refuses the input before tar reads a block.
+        yield ReadResult(
+            None,
+            GzipDataError((foreign[1],), fatal=True, exit_code=foreign[2]),
+        )
+        return
     if suffix == ":gz" or (suffix == "" and data.startswith(GZIP_MAGIC)):
         data, failure = gunzip_partial(data)
         mode = "r:"
-    if failure is not None and (not failure.keeps_output or not data):
+    if failure is not None and not data:
         yield ReadResult(None, failure)
         return
     notices: tuple[str, ...] = ()
+    cut: int | None = None
+    tail = b""
     with ExitStack() as stack:
         tf: tarfile.TarFile | None
         try:
             tf = stack.enter_context(
                 tarfile.open(fileobj=io.BytesIO(data), mode=mode)
             )
-            tf.getmembers()
+            if isinstance(tf.fileobj, io.BytesIO):
+                whole = len(data) // tarfile.BLOCKSIZE * tarfile.BLOCKSIZE
+                tf = stack.enter_context(
+                    tarfile.open(fileobj=ZeroTail(data[:whole]), mode="r:")
+                )
+                cut = next(
+                    (
+                        idx
+                        for idx, member in enumerate(tf.getmembers())
+                        if member.offset_data + member.size > whole
+                    ),
+                    None,
+                )
+                if cut is not None:
+                    member = tf.getmembers()[cut]
+                    tail = data[member.offset_data : whole]
+            else:
+                tf.getmembers()
         except tarfile.TarError as exc:
             logger.debug("tar: failed to parse archive: %s", exc)
             tf = None
@@ -125,7 +173,21 @@ def _open_archive(
                 if failure is None
                 else ()
             )
-        yield ReadResult(tf, failure, notices)
+        yield ReadResult(tf, failure, notices, cut, tail)
+
+
+def _cut_short(failure: GzipDataError | None, lines: list[str]) -> bytes:
+    """tar's stderr when a member's data runs out: gzip's own lines
+    first, if gzip stopped too, then tar's lines and its two fatal ones.
+    tar exits before it waits for its child, so no child status is
+    reported.
+
+    Args:
+        failure (GzipDataError | None): why gzip stopped, if it did.
+        lines (list[str]): tar's own stderr lines from the run.
+    """
+    lead = failure.render("stdin").encode() if failure is not None else b""
+    return lead + _stderr(lines + [UNEXPECTED_EOF, FATAL_TRAILER])
 
 
 def _child_failure(failure: GzipDataError, lines: list[str]) -> bytes:
@@ -423,8 +485,16 @@ async def _list_archive(
         errors = await check_directories(directories, is_dir, stat)
         if errors:
             return None, IOResult(exit_code=2, stderr=_stderr(errors))
-    shown = [row for idx, row in enumerate(rows) if idx in keep]
+    shown = [
+        row
+        for idx, row in enumerate(rows)
+        if idx in keep and (result.cut is None or idx <= result.cut)
+    ]
     stdout = ("\n".join(shown) + "\n").encode() if shown else None
+    if result.cut is not None:
+        return stdout, IOResult(
+            exit_code=2, stderr=_cut_short(failure, list(result.notices))
+        )
     if failure is not None:
         return stdout, IOResult(
             exit_code=2, stderr=_child_failure(failure, list(result.notices))
@@ -480,6 +550,8 @@ async def _extract_archive(
                 if errors:
                     return None, IOResult(exit_code=2, stderr=_stderr(errors))
             for idx, member in enumerate(members):
+                if result.cut is not None and idx > result.cut:
+                    break
                 if idx not in keep:
                     continue
                 # A symlink member has no bytes to write and no namespace to
@@ -511,10 +583,15 @@ async def _extract_archive(
                                 continue
                             names.append(member.name.rstrip("/") + "/")
                     continue
-                extracted = tf.extractfile(member)
-                if not extracted:
-                    continue
-                content = extracted.read()
+                if idx == result.cut:
+                    # Only the whole blocks that arrived are written.
+                    content = result.tail
+                    notices.append(UNEXPECTED_EOF)
+                else:
+                    extracted = tf.extractfile(member)
+                    if not extracted:
+                        continue
+                    content = extracted.read()
                 if to_stdout:
                     extracted_bytes.append(content)
                     names.append(member.name)
@@ -570,6 +647,12 @@ async def _extract_archive(
         )
         stdout = listing
         stderr_lines = list(notices)
+    if result.cut is not None:
+        return stdout, IOResult(
+            exit_code=2,
+            stderr=_cut_short(failure, stderr_lines),
+            writes=writes,
+        )
     if failure is not None:
         return stdout, IOResult(
             exit_code=2,
@@ -615,7 +698,9 @@ async def tar(
     relay: bool = False,
     stdin: ByteSource | None = None,
 ) -> tuple[ByteSource | None, IOResult]:
-    archive = f if f else None
+    # With no -f the archive is standard input or output, which is GNU
+    # tar's compiled-in default (no TAPE in the environment).
+    archive = f or replace(PathSpec.from_str_path("/dev/stdin"), raw_path="-")
     if relay and archive is not None:
         # Relay doors address by full virtual path (flat_scopes'
         # convention), not by the mount-relative key the wrapper's
@@ -627,8 +712,6 @@ async def tar(
     mode_suffix = _compression_suffix(z, j, J)
     strip_n = strip_components
     if c:
-        if archive is None:
-            raise ValueError("tar: -f is required")
         plan = await plan_create(
             paths,
             archive=archive,
@@ -650,8 +733,6 @@ async def tar(
             plan, archive, mode_suffix, v, read_bytes, write_bytes
         )
     if t:
-        if archive is None:
-            raise ValueError("tar: -f is required")
         return await _list_archive(
             archive,
             mode_suffix,
@@ -663,8 +744,6 @@ async def tar(
             is_dir,
         )
     if x:
-        if archive is None:
-            raise ValueError("tar: -f is required")
         return await _extract_archive(
             archive,
             dest_path,

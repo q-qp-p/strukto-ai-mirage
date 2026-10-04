@@ -262,15 +262,43 @@
   },
   "options": [
     {
+      "short": "-a",
+      "type": "bool"
+    },
+    {
+      "long": "--no-create",
       "short": "-c",
       "type": "bool"
     },
     {
+      "long": "--date",
+      "short": "-d",
+      "type": "str"
+    },
+    {
+      "short": "-f",
+      "type": "bool"
+    },
+    {
+      "long": "--no-dereference",
+      "short": "-h",
+      "type": "bool"
+    },
+    {
+      "short": "-m",
+      "type": "bool"
+    },
+    {
+      "long": "--reference",
       "short": "-r",
       "type": "path"
     },
     {
-      "short": "-d",
+      "short": "-t",
+      "type": "str"
+    },
+    {
+      "long": "--time",
       "type": "str"
     }
   ],

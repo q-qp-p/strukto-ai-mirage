@@ -68,8 +68,8 @@ async def handle_cross_mount(
         dispatch (DispatchFn): Workspace operation dispatcher (RELAY).
         run_single (RunSingle): Executor-injected single-mount runner
             (STREAM, FANOUT and RELAY's wc).
-        stdin (ByteSource | None): Original stdin (tee re-feeds it per
-            operand).
+        stdin (ByteSource | None): Original stdin, which a ``-`` operand
+            reads.
         storage_key (Callable | None): Maps an operand to its storage
             identity (RELAY's transfer commands).
         ns (NamespaceView | None): Name-plane facts for the RELAY
@@ -117,7 +117,7 @@ async def handle_cross_mount(
                 cmd_name, scopes, text_args, flag_kwargs, run_single
             )
         return await run_fanout(
-            cmd_name, scopes, text_args, flag_kwargs, run_single, stdin=stdin
+            cmd_name, scopes, text_args, flag_kwargs, run_single
         )
     except UsageError as exc:
         # The command's own usage refusal (cmp's bad skip, an extra

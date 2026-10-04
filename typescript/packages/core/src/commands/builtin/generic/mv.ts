@@ -48,8 +48,10 @@ import {
   makeBackup,
   overwriteGate,
   overwriteTypeError,
+  prompter,
   slashRefusesFile,
   splitOperands,
+  stderrOf,
   suffixFlag,
   targetDirError,
   targetFlags,
@@ -67,6 +69,7 @@ const HOLDING_ATTEMPTS = 100
 
 export interface MvFlags {
   noClobber: boolean
+  interactive: boolean
   verbose: boolean
   update: string | null
   backup: string | null
@@ -80,6 +83,7 @@ export interface MvFlags {
 export function mvFlags(init: Partial<MvFlags> = {}): MvFlags {
   return {
     noClobber: init.noClobber ?? false,
+    interactive: init.interactive ?? false,
     verbose: init.verbose ?? false,
     update: init.update ?? null,
     backup: init.backup ?? null,
@@ -95,15 +99,16 @@ function isPrimitiveMove(strategy: MoveStrategy): strategy is PrimitiveMove {
   return 'readBytes' in strategy
 }
 
-// Parse the mv flag bag once into a frozen struct. -f/-i are accepted
-// no-ops (non-interactive control plane: overwrite always proceeds unless
-// -n/--update say otherwise), and --strip-trailing-slashes is a no-op
-// because PathSpec already normalizes trailing slashes.
+// Parse the mv flag bag once into a frozen struct. The last of -f, -i and
+// -n decides: -i asks before each overwrite, -n skips, -f replaces.
+// --strip-trailing-slashes is a no-op because PathSpec already normalizes
+// trailing slashes.
 export function parseFlags(fl: FlagView): MvFlags {
   const update = updateMode('mv', fl)
   const suffix = suffixFlag(fl)
   const control = backupControl('mv', backupRaw(fl), suffix)
-  const noClobber = fl.asBool('no_clobber')
+  const answer = fl.typedOrder('force', 'interactive', 'no_clobber').at(-1)
+  const noClobber = answer === 'no_clobber'
   const exchange = fl.asBool('exchange')
   if (control !== null && control !== 'none' && (exchange || noClobber || update === 'none-fail')) {
     throw new UsageError(
@@ -115,6 +120,7 @@ export function parseFlags(fl: FlagView): MvFlags {
   const [targetDir, noTargetDir] = targetFlags('mv', fl)
   return mvFlags({
     noClobber,
+    interactive: answer === 'interactive',
     verbose: fl.asBool('verbose'),
     update,
     backup: control,
@@ -312,6 +318,8 @@ export async function mvGeneric(
   // reveal.
   guard?: (src: PathSpec, dst: PathSpec) => void,
   copies?: TransferLinks,
+  // Where -i reads its answers.
+  stdin?: ByteSource | null,
 ): Promise<[ByteSource | null, IOResult]> {
   if (copies !== undefined) stat = (path) => linkStat(copies, path)
   const keyOf = backendKey ?? backendKeyDefault
@@ -348,17 +356,19 @@ export async function mvGeneric(
   if (versionReaddir === undefined && isPrimitiveMove(strategy)) {
     versionReaddir = strategy.readdir
   }
+  const errors: string[] = []
+  const accepted: string[] = []
   const policy: TransferPolicy = {
     cmdName: 'mv',
     noClobber: flags.noClobber,
     update: flags.update,
     backup: flags.backup,
     suffix: flags.suffix,
+    ask: flags.interactive ? prompter('mv', stdin ?? null, errors, accepted) : null,
   }
   const renames: [string, string][] = []
   const writes: Record<string, ByteSource> = {}
   const lines: string[] = []
-  const errors: string[] = []
   const created = new Set<string>()
   for (const [src, target] of copyTargets(sources, dst, dstIsDir, dstExists, dstErr)) {
     const { exists: srcExists, isDir: srcIsDir, strerror: srcErr } = await sourceKind(stat, src)
@@ -435,6 +445,9 @@ export async function mvGeneric(
       created.has(keyOf(target)) &&
       !(flags.noClobber || updateGates(flags.update) || flags.backup === 'numbered')
     ) {
+      // -i asks first: GNU only meets the just-created rule once the answer
+      // says to replace.
+      if (policy.ask && !(await policy.ask(target))) continue
       errors.push(`mv: will not overwrite just-created '${target.rawPath}' with '${src.rawPath}'`)
       continue
     }
@@ -555,6 +568,13 @@ export async function mvGeneric(
     }
   }
   const output: ByteSource | null = lines.length > 0 ? ENC.encode(lines.join('\n') + '\n') : null
-  const stderr = errors.length > 0 ? ENC.encode(errors.join('\n') + '\n') : null
-  return [output, new IOResult({ writes, renames, stderr, exitCode: errors.length > 0 ? 1 : 0 })]
+  return [
+    output,
+    new IOResult({
+      writes,
+      renames,
+      stderr: stderrOf(errors),
+      exitCode: errors.length > accepted.length ? 1 : 0,
+    }),
+  ]
 }

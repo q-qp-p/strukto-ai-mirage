@@ -66,6 +66,7 @@ async def mv(
             and opts.dispatch is not None
             else None
         ),
+        stdin=opts.stdin,
     )
 
 

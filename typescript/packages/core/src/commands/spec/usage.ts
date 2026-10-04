@@ -169,12 +169,8 @@ export function unknownOptionError(cmdName: string, token: string): [Uint8Array,
   }
   if (cmdName === 'rg') return rgUnknownFlag(token)
   if (PYTHON_NAMES.has(cmdName)) {
-    // CPython's own two shapes, which do not match each other: the short
-    // form capitalizes and takes a colon, the long form does neither.
-    // Both pinned on 3.12.13.
-    if (token.startsWith('--')) {
-      return pythonOptionError(cmdName, `unknown option ${token}\n`)
-    }
+    // CPython names the whole typed token, long or short (pinned on 3.14.7;
+    // 3.12 still spelled a long one `unknown option`).
     const dashed = token.startsWith('-') ? token : `-${token}`
     return pythonOptionError(cmdName, `Unknown option: ${dashed}\n`)
   }
@@ -231,7 +227,7 @@ function trigrams(name: string): Set<string> {
 // they will not take by naming the whole typed token as unknown rather than by
 // naming the option. Each one is measured: `curl --silent=2` is
 // `curl: option --silent=2: is unknown`, `python3 --version=2` is
-// `unknown option --version=2`, `jq --tab=2` is `jq: Unknown option --tab=2`,
+// `Unknown option: --version=2`, `jq --tab=2` is `jq: Unknown option --tab=2`,
 // and find reads the word as a predicate. Every other command here is a GNU
 // tool whose getopt_long words the refusal the other way, so the set is the
 // exception list and not the rule.

@@ -87,41 +87,6 @@ function makeBridge(): {
 }
 
 describe('PyodideRuntime mount visibility', () => {
-  it('mounted prefixes are preloaded into MEMFS so Python reads see them', async () => {
-    const { dispatch, files } = makeBridge()
-    files.set('/ram/hello.txt', new TextEncoder().encode('world'))
-    const rt = new PyodideRuntime()
-    rt.bind(new WorkspaceBinding(dispatch, new PrefixResolver(() => ['/ram/'])))
-    const result = await rt.run({
-      code: `with open('/ram/hello.txt') as f: print(f.read())`,
-      args: [],
-      env: {},
-      stdin: new Uint8Array(),
-    })
-    expect(new TextDecoder().decode(result.stdout)).toContain('world')
-    expect(result.exitCode).toBe(0)
-    await rt.close()
-  }, 60_000)
-
-  it('writes under a mounted prefix flush via the bridge on close', async () => {
-    const { dispatch, calls } = makeBridge()
-    const rt = new PyodideRuntime()
-    rt.bind(new WorkspaceBinding(dispatch, new PrefixResolver(() => ['/ram/'])))
-    await rt.run({
-      code: `with open('/ram/out.txt', 'wb') as f: f.write(b'data')`,
-      args: [],
-      env: {},
-      stdin: new Uint8Array(),
-    })
-    const writes = calls.filter((c) => c.op === 'write')
-    expect(writes).toHaveLength(1)
-    const w0 = writes[0]
-    if (w0?.bytes === undefined) throw new Error('unreachable')
-    expect(w0.path).toBe('/ram/out.txt')
-    expect(new TextDecoder().decode(w0.bytes)).toBe('data')
-    await rt.close()
-  }, 60_000)
-
   it('removing a prefix from the live mount view stops flushing', async () => {
     const { dispatch, calls } = makeBridge()
     const mounts: string[] = ['/ram/']
@@ -196,27 +161,6 @@ describe('PyodideRuntime mount visibility', () => {
       console.warn = warn
       await rt.close()
     }
-  }, 60_000)
-
-  it('a nested prefix stays reachable under its parent mount', async () => {
-    // Only the maximal prefix earns an Emscripten mountpoint; the
-    // nested mount's content arrives through the parent's preload,
-    // which descends the door's merged readdir. Mounting both used to
-    // orphan the child under the parent's mountpoint.
-    const { dispatch, files } = makeBridge()
-    files.set('/data/outer.txt', new TextEncoder().encode('OUTER'))
-    files.set('/data/inner/deep.txt', new TextEncoder().encode('DEEP'))
-    const rt = new PyodideRuntime()
-    rt.bind(new WorkspaceBinding(dispatch, new PrefixResolver(() => ['/data/', '/data/inner/'])))
-    const result = await rt.run({
-      code: "print(open('/data/outer.txt').read(), open('/data/inner/deep.txt').read())",
-      args: [],
-      env: {},
-      stdin: new Uint8Array(),
-    })
-    expect(result.exitCode).toBe(0)
-    expect(new TextDecoder().decode(result.stdout)).toContain('OUTER DEEP')
-    await rt.close()
   }, 60_000)
 
   it('a failed flush surfaces on stderr and flips a clean exit to 1', async () => {

@@ -1082,6 +1082,24 @@
         "stdout": "/data/g1\n/data/g1/deep\n/data/g1/deep/g.txt\n/data/g1/deep/gl\n/data/g2\n/data/g2/deep\n/data/g3\n/data/g3/g.txt\n/ghost/deep\n/ghost/deep/g.txt\n/ghost/deep/ghost\n/ghost/deep/ghost/deep\n/ghost/deep/gl\n",
         "stderr": ""
       }
+    },
+    {
+      "id": "nest_tree_depth_and_x_at_the_mount_root",
+      "seq": 15300404,
+      "targets": [
+        "ram-nested"
+      ],
+      "command": "tree -L 1 -P top.txt /data; echo rc=$?; tree -x -P leaf.txt /data/inner; echo rc=$?",
+      "expect": {
+        "exit": 0,
+        "stdout": "/data\n|-- inner\n`-- top.txt\n\n2 directories, 1 file\nrc=0\n/data/inner\n`-- leaf.txt\n\n1 directory, 1 file\nrc=0\n",
+        "stderr": ""
+      },
+      "flags": [
+        "L",
+        "P",
+        "x"
+      ]
     }
   ]
 }

@@ -76,6 +76,7 @@ class FileVersionTracker:
         self._enabled = enabled
         self._read_versions: dict[str, str] = {}
         self._edit_versions: dict[str, str] = {}
+        self._writes: dict[str, int] = {}
         self._seen: set[str] = set()
 
     def _key(self, path: str) -> str:
@@ -111,6 +112,7 @@ class FileVersionTracker:
         # write or edit look stale with nobody having touched the file.
         if not self._enabled:
             return
+        self._writes[key] = self._writes.get(key, 0) + 1
         version = await self._current_version(path)
         if version is None:
             self._read_versions.pop(key, None)
@@ -141,15 +143,26 @@ class FileVersionTracker:
     async def read(self, path: str) -> bytes:
         """Read a file and record what the agent was shown.
 
+        The bytes fetched may predate a write that lands while the read
+        is in flight, so such a read fetches once more: the agent is
+        never shown bytes older than a write it already saw finish. A
+        write that lands during the second fetch too leaves the stamp of
+        what was shown, and the next write is refused as stale.
+
         Args:
             path (str): Virtual path.
 
         Returns:
             bytes: The stored bytes.
         """
+        key = self._key(path)
+        writes = self._writes.get(key)
         content = await self.vfs.read(path)
-        if self._enabled:
-            self._read_versions[self._key(path)] = fingerprint(content)
+        if not self._enabled:
+            return content
+        if self._writes.get(key) != writes:
+            content = await self.vfs.read(path)
+        self._read_versions[key] = fingerprint(content)
         return content
 
     async def read_for_edit(self, path: str) -> bytes:

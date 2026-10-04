@@ -214,14 +214,17 @@
   },
   "options": [
     {
+      "long": "--format",
       "short": "-c",
       "type": "str"
     },
     {
+      "long": "--file-system",
       "short": "-f",
-      "type": "str"
+      "type": "bool"
     },
     {
+      "long": "--dereference",
       "short": "-L",
       "type": "bool"
     }

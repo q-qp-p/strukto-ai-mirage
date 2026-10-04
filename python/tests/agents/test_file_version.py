@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from mirage import RAMVFS, MountMode, Workspace
@@ -42,11 +44,78 @@ class _RenderingWorkspace:
         self.namespace = ws.namespace
 
 
+class _HeldOps:
+    """Holds the reads at the given call indices once they fetched their
+    bytes, until the test releases them, so a write can land while a read
+    is in flight.
+    """
+
+    def __init__(self, ops, hold_at):
+        self._ops = ops
+        self._reads = 0
+        self.fetched = {n: asyncio.Event() for n in hold_at}
+        self.release = {n: asyncio.Event() for n in hold_at}
+
+    async def read(self, path):
+        n = self._reads
+        self._reads += 1
+        data = await self._ops.read(path)
+        if n in self.release:
+            self.fetched[n].set()
+            await self.release[n].wait()
+        return data
+
+    async def write(self, path, data):
+        await self._ops.write(path, data)
+
+    async def exists(self, path):
+        return await self._ops.exists(path)
+
+
+class _HeldWorkspace:
+    def __init__(self, ws, hold_at):
+        self.vfs = _HeldOps(ws.vfs, hold_at)
+        self.namespace = ws.namespace
+
+
 def test_fingerprint_is_stable_and_url_safe():
     stamp = fingerprint(b"hello")
+    assert stamp == "LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ"
     assert stamp == fingerprint(b"hello")
     assert stamp != fingerprint(b"hello!")
     assert "+" not in stamp and "/" not in stamp and "=" not in stamp
+
+
+@pytest.mark.asyncio
+async def test_read_in_flight_shows_and_stamps_a_write_that_lands(workspace):
+    await workspace.vfs.write("/a.txt", b"one")
+    held = _HeldWorkspace(workspace, [0])
+    tracker = FileVersionTracker(held)
+    reading = asyncio.create_task(tracker.read("/a.txt"))
+    await asyncio.wait_for(held.vfs.fetched[0].wait(), 5)
+    await tracker.write("/a.txt", "two")
+    held.vfs.release[0].set()
+    assert await reading == b"two"
+    await tracker.write("/a.txt", "three")
+    assert await workspace.vfs.read("/a.txt") == b"three"
+
+
+@pytest.mark.asyncio
+async def test_writes_during_both_fetches_keep_the_shown_stamp(workspace):
+    await workspace.vfs.write("/a.txt", b"one")
+    held = _HeldWorkspace(workspace, [0, 2])
+    tracker = FileVersionTracker(held)
+    reading = asyncio.create_task(tracker.read("/a.txt"))
+    await asyncio.wait_for(held.vfs.fetched[0].wait(), 5)
+    await tracker.write("/a.txt", "two")
+    held.vfs.release[0].set()
+    await asyncio.wait_for(held.vfs.fetched[2].wait(), 5)
+    await tracker.write("/a.txt", "three")
+    held.vfs.release[2].set()
+    assert await reading == b"two"
+    with pytest.raises(StaleMirageFileError):
+        await tracker.write("/a.txt", "four")
+    assert await workspace.vfs.read("/a.txt") == b"three"
 
 
 @pytest.mark.asyncio

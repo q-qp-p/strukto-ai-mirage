@@ -271,6 +271,40 @@
         "stdout": "relay\n",
         "stderr": ""
       }
+    },
+    {
+      "id": "xm_tar_c_refuses_an_empty_archive_name",
+      "seq": 15100801,
+      "targets": [
+        "ram",
+        "disk",
+        "redis",
+        "opfs",
+        "s3",
+        "databricks",
+        "gridfs",
+        "s3-prefix",
+        "databricks-prefix",
+        "gridfs-prefix",
+        "hf",
+        "hf-prefix",
+        "dropbox",
+        "dropbox-root",
+        "onedrive",
+        "sharepoint",
+        "sharepoint-prefix",
+        "ssh",
+        "nextcloud",
+        "gdrive",
+        "gdrive-folder",
+        "box"
+      ],
+      "command": "(mkdir -p /data2/fcA_xe && echo hello > /data2/fcA_xe/a.txt && cd /data && tar -cf '' /data2/fcA_xe/a.txt; rc=$?; rm -r /data2/fcA_xe; exit $rc)",
+      "expect": {
+        "exit": 2,
+        "stdout": "",
+        "stderr": "tar: : Cannot open: No such file or directory\ntar: Error is not recoverable: exiting now\n"
+      }
     }
   ]
 }

@@ -48,6 +48,91 @@ requirement_met() {
   esac
 }
 
+# The runtime table run.py and run.ts keep: the guest language of each
+# runtime a case's `runtimes` may name (null for a sandbox, which runs whole
+# lines), the line head a program runs under, per host what the runtime
+# needs (absent: not on that host; e2b is python's only, see the README),
+# the world entry it is built from, and the runtimes an unmet requirement
+# skips even under INTEG_RUNTIME_STRICT.
+RUNTIMES='{
+  "language": {"monty": "python", "wasi": "python", "pyodide": "python", "quickjs": "js",
+    "local": "python", "sandlock": "python", "docker": null, "ssh": null, "e2b": null,
+    "smolvm": null, "apple_container": null},
+  "head": {"python": "python3 -c", "js": "node -e"},
+  "requires": {
+    "python": {"monty": [], "wasi": ["env:MIRAGE_WASI_HOME"], "quickjs": ["env:MIRAGE_QUICKJS_HOME"],
+      "local": [], "sandlock": ["env:MIRAGE_INTEG_SANDLOCK"],
+      "docker": ["env:MIRAGE_INTEG_DOCKER_CONTAINER"], "ssh": ["env:MIRAGE_INTEG_SSH_HOST"],
+      "e2b": ["env:MIRAGE_INTEG_E2B_SANDBOX"], "smolvm": ["env:MIRAGE_INTEG_SMOLVM_MACHINE"],
+      "apple_container": ["env:MIRAGE_INTEG_APPLE_CONTAINER"]},
+    "typescript": {"monty": [], "pyodide": [], "quickjs": [],
+      "local": [], "sandlock": ["env:MIRAGE_INTEG_SANDLOCK"],
+      "docker": ["env:MIRAGE_INTEG_DOCKER_CONTAINER"], "ssh": ["env:MIRAGE_INTEG_SSH_HOST"],
+      "smolvm": ["env:MIRAGE_INTEG_SMOLVM_MACHINE"],
+      "apple_container": ["env:MIRAGE_INTEG_APPLE_CONTAINER"]}
+  },
+  "entry": {
+    "sandlock": {"captures": ["python3", "node", "@external"]},
+    "docker": {"captures": ["*"], "config": {"container": "${MIRAGE_INTEG_DOCKER_CONTAINER}"}},
+    "ssh": {"captures": ["*"], "config": {"host": "${MIRAGE_INTEG_SSH_HOST}", "port": 2222,
+      "username": "${MIRAGE_INTEG_SSH_USERNAME}", "identity_file": "${MIRAGE_INTEG_SSH_KEY}"}},
+    "e2b": {"captures": ["*"], "config": {"sandbox_id": "${MIRAGE_INTEG_E2B_SANDBOX}"}},
+    "smolvm": {"captures": ["*"], "config": {"machine": "${MIRAGE_INTEG_SMOLVM_MACHINE}"}},
+    "apple_container": {"captures": ["*"], "config": {"container": "${MIRAGE_INTEG_APPLE_CONTAINER}"}}
+  },
+  "optional": ["sandlock", "e2b", "smolvm", "apple_container"]
+}'
+
+# The case once per runtime it names on this host, one JSON per line (a case
+# without `runtimes` is printed as it is), as run.py `_for_runtime` builds
+# them: a step's `program`, `script` or `command` map picks the runtime's
+# language (a step without it is left out), `expect_on` keyed by the
+# runtime, then by `runtime@host`, is merged over `expect`, and the world
+# runs the runtime's table entry with the case's `entry` laid over it.
+# INTEG_RUNTIMES (comma separated) keeps only the runtimes it names.
+runtime_variants() {
+  local case_json="$1" host="$2"
+  jq -c --arg h "$host" --arg only "${INTEG_RUNTIMES:-}" --argjson t "$RUNTIMES" '
+    if has("runtimes") | not then . else
+      . as $c
+      | $c.runtimes[]
+      | select($t.requires[$h][.] != null)
+      | . as $r
+      | select($only == "" or (($only | split(",")) | index($r)) != null)
+      | $t.language[$r] as $lang
+      | ($t.entry[$r] // {}) as $base
+      | ($c.entry // {}) as $over
+      | [$c.steps[]
+          | if $lang == null then .
+            elif has("program") then
+              select(.program[$lang] != null)
+              | del(.program) + {command: ($t.head[$lang] + " " + (.program[$lang] | @sh)), guest: true}
+            elif (.script | type) == "object" then
+              select(.script[$lang] != null)
+              | . + {command: $t.head[$lang], script: .script[$lang], guest: true}
+            elif (.command | type) == "object" then
+              select(.command[$lang] != null)
+              | . + {command: .command[$lang], guest: true}
+            else . end
+          | .expect = ((.expect // {}) + ((.expect_on // {})[$r] // {})
+              + ((.expect_on // {})[$r + "@" + $h] // {}))
+        ] as $steps
+      | select($lang == null or any($steps[]; .guest))
+      | (if $base == {} and $over == {} then $r
+         else {name: $r} + $base + $over
+           + (if ($base | has("config")) or ($over | has("config"))
+              then {config: (($base.config // {}) + ($over.config // {}))} else {} end)
+         end) as $entry
+      | $c + {
+          id: ($c.id + "@" + $r),
+          world: (($c.world // {}) + {runtimes: [$entry, "workspace"]}),
+          steps: ($steps | map(del(.guest))),
+          requires: (($c.requires // []) + $t.requires[$h][$r]),
+          optional: ($t.optional | index($r) != null)
+        }
+    end' <<<"$case_json"
+}
+
 # Whether this case can run over the CLI at all. Worlds carrying code
 # policies (runner-local Policy classes) or a failing mount (a runner-local
 # VFS) cannot cross the yaml/daemon boundary, and read_op steps need the
@@ -101,6 +186,7 @@ write_world_yaml() {
   jq '{mode: "EXEC",
        mounts: ((.mounts // {"/ram": {"vfs": "ram"}})
          | map_values({vfs: .vfs}
+             + (if .mode then {mode: .mode} else {} end)
              + (if .limits then {command_limits: .limits} else {} end)))}
       + (if .command_limits then {command_limits: .command_limits} else {} end)
       + (if .profiles then {profiles: .profiles} else {} end)
@@ -115,9 +201,11 @@ run_case() {
   local cli="$1" host="$2" suite="$3" case_json="$4" work="$5"
   local case_id wsid world_json session_id
   case_id="$suite/$(jq -r '.id' <<<"$case_json")"
-  # The suite is part of the id: suites share case ids by design (each
-  # runtime's open, view and structure cases).
-  wsid="rt-$(tr '_' '-' <<<"$suite")-$(jq -r '.id' <<<"$case_json" | tr '_' '-')"
+  # The suite is part of the id: two suites may share a case id. A
+  # workspace id takes letters, digits, dots and dashes, so the suite's
+  # folders, a mode's `+` and a variant's `@runtime` are spelled out.
+  wsid=$(printf 'rt-%s-%s' "$suite" "$(jq -r '.id' <<<"$case_json")" \
+    | sed 's/+/plus/g' | tr '/_@' '---')
   world_json=$(jq -c '.world // {}' <<<"$case_json")
   write_world_yaml "$world_json" "$work"
 
@@ -307,18 +395,23 @@ run_host() {
     echo "note $host lane $lane: warm-up delete failed: $(error_line "$work/warm.out")"
   fi
 
-  local file suite suite_json requires unmet
-  for file in "$SUITE_DIR"/*.json; do
-    suite_json=$(cat "$file")
-    suite=$(jq -r '.suite' <<<"$suite_json")
-    if [ "${#ONLY_SUITES[@]}" -gt 0 ] && [[ " ${ONLY_SUITES[*]} " != *" $suite "* ]]; then
-      continue
+  local file suite suite_json requires unmet only claim
+  while IFS= read -r file <&3; do
+    suite_json=$(cat "$SUITE_DIR/$file")
+    suite="${file%.json}"
+    if [ "${#ONLY_SUITES[@]}" -gt 0 ]; then
+      local picked=0
+      for only in "${ONLY_SUITES[@]}"; do
+        if [ "$suite" = "$only" ] || [[ "$suite" == "$only/"* ]]; then picked=1; fi
+      done
+      [ "$picked" = 1 ] || continue
     fi
     # Whichever of the host's lanes reaches a suite first runs it: mkdir
     # either creates the claim or fails because another lane already did.
     # Any other failure would drop the suite from both lanes, so it counts.
-    if ! mkdir "$RESULT_DIR/claims/$host-$suite" 2>/dev/null; then
-      if [ ! -d "$RESULT_DIR/claims/$host-$suite" ]; then
+    claim="$RESULT_DIR/claims/$host-${suite//\//-}"
+    if ! mkdir "$claim" 2>/dev/null; then
+      if [ ! -d "$claim" ]; then
         failures+=("$host/$suite: could not claim the suite")
         fail=$((fail + 1))
       fi
@@ -345,28 +438,46 @@ run_host() {
     # The per-host logs print only after both hosts finish, so a suite's
     # cost is not otherwise recoverable from the run.
     local suite_t0=$SECONDS
-    local case_json
-    while IFS= read -r case_json; do
+    local listed case_json case_id
+    while IFS= read -r listed; do
       if ! jq -e --arg h "$host" \
           '(.hosts // ["python", "typescript"]) | index($h)' \
-          >/dev/null <<<"$case_json"; then
+          >/dev/null <<<"$listed"; then
         continue
       fi
-      if ! cli_expressible "$case_json"; then
-        echo "skip $host/$suite/$(jq -r '.id' <<<"$case_json") (sdk-only)"
-        skipped=$((skipped + 1))
-        continue
-      fi
-      if run_case "$cli" "$host" "$suite" "$case_json" "$work"; then
-        echo "ok $host/$suite/$(jq -r '.id' <<<"$case_json")"
-        pass=$((pass + 1))
-      else
-        echo "FAIL $host/$suite/$(jq -r '.id' <<<"$case_json")"
-        fail=$((fail + 1))
-      fi
+      while IFS= read -r case_json; do
+        case_id=$(jq -r '.id' <<<"$case_json")
+        unmet=""
+        for req in $(jq -r '(.requires // [])[]' <<<"$case_json"); do
+          requirement_met "$req" || unmet="$unmet $req"
+        done
+        if [ -n "$unmet" ]; then
+          if [ "$STRICT" == "1" ] && \
+              [ "$(jq -r '.optional // false' <<<"$case_json")" != "true" ]; then
+            failures+=("$host/$suite/$case_id: unmet requirements$unmet (INTEG_RUNTIME_STRICT=1)")
+            fail=$((fail + 1))
+          else
+            echo "skip $host/$suite/$case_id (unmet:$unmet)"
+            skipped=$((skipped + 1))
+          fi
+          continue
+        fi
+        if ! cli_expressible "$case_json"; then
+          echo "skip $host/$suite/$case_id (sdk-only)"
+          skipped=$((skipped + 1))
+          continue
+        fi
+        if run_case "$cli" "$host" "$suite" "$case_json" "$work"; then
+          echo "ok $host/$suite/$case_id"
+          pass=$((pass + 1))
+        else
+          echo "FAIL $host/$suite/$case_id"
+          fail=$((fail + 1))
+        fi
+      done < <(runtime_variants "$listed" "$host")
     done < <(jq -c '.cases[]' <<<"$suite_json")
     echo "suite $host/$suite $((SECONDS - suite_t0))s"
-  done
+  done 3< <(cd "$SUITE_DIR" && find . -name '*.json' | sed 's|^\./||' | sort)
 
   $cli daemon stop >/dev/null 2>&1 </dev/null || true
   sleep 1

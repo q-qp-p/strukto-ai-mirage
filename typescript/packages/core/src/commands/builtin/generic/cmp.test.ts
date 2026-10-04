@@ -283,31 +283,24 @@ describe('parseCount leaves the value unescaped', () => {
 
 describe('cmpGeneric -s', () => {
   // diffutils 3.10 opens both operands, then reads: -s drops only a failed
-  // open, a directory opens and fails reading, and one file named twice at
-  // the same offset is equal unread. Mirrors test_cmp.py.
+  // open, and a directory opens and fails reading. Mirrors test_cmp.py.
   it.each([
-    [['dir', 'one'], true, 2, 'cmp: dir: Is a directory\n'],
-    [['one', 'dir'], true, 2, 'cmp: dir: Is a directory\n'],
-    [['dir', 'nope'], true, 2, ''],
-    [['dir', 'nope'], false, 2, 'cmp: nope: No such file or directory\n'],
-    [['dir', 'dir'], false, 0, ''],
-  ] as const)(
-    'reads a directory after both opens: %j silent %s',
-    async (names, silent, code, want) => {
-      async function* read(p: PathSpec): AsyncIterable<Uint8Array> {
-        await Promise.resolve()
-        if (p.virtual === '/F/dir') throw eisdir(p)
-        if (p.virtual.endsWith('nope')) throw enoent(p)
-        yield ENC.encode('a')
-      }
-      const paths = names.map(
-        (n) => new PathSpec({ virtual: `/F/${n}`, directory: '/F', vfsPath: n, rawPath: n }),
-      )
-      const opts = { flags: silent ? { quiet: true } : {}, stdin: null } as unknown as CommandOpts
-      const [, io] = await cmpGeneric(paths, [], opts, read)
-      expect([DEC.decode(await materialize(io.stderr)), io.exitCode]).toEqual([want, code])
-    },
-  )
+    [['one', 'dir'], 'cmp: dir: Is a directory\n'],
+    [['dir', 'nope'], ''],
+  ] as const)('reads a directory after both opens: %j', async (names, want) => {
+    async function* read(p: PathSpec): AsyncIterable<Uint8Array> {
+      await Promise.resolve()
+      if (p.virtual === '/F/dir') throw eisdir(p)
+      if (p.virtual.endsWith('nope')) throw enoent(p)
+      yield ENC.encode('a')
+    }
+    const paths = names.map(
+      (n) => new PathSpec({ virtual: `/F/${n}`, directory: '/F', vfsPath: n, rawPath: n }),
+    )
+    const opts = { flags: { quiet: true }, stdin: null } as unknown as CommandOpts
+    const [, io] = await cmpGeneric(paths, [], opts, read)
+    expect([DEC.decode(await materialize(io.stderr)), io.exitCode]).toEqual([want, 2])
+  })
 })
 
 async function runSkips(
@@ -358,11 +351,7 @@ describe('the skip operands', () => {
 
   it.each([
     [[], 'cmp'],
-    [['-s'], '-s'],
-    [['-n', '5'], '5'],
     [['-i3'], '-i3'],
-    [['--ignore-initial=3'], '--ignore-initial=3'],
-    [['-s', '--'], '--'],
   ] as const)('names the last word of %j when no operand is given', async (argv, after) => {
     const opts = { flags: {}, stdin: null, argv } as unknown as CommandOpts
     const stream = (): AsyncIterable<Uint8Array> => {

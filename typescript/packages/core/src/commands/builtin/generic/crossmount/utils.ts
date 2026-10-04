@@ -56,16 +56,13 @@ export async function runOperands(
   scopes: PathSpec[],
   texts: string[],
   flagKwargs: Record<string, FlagValue>,
-  stdinBytes: Uint8Array | null = null,
   stopAtSuccess = false,
 ): Promise<OperandRun[]> {
   // `stopAtSuccess` runs no operand after one that exits 0, which is how
   // grep -q and rg -q stop at their first match.
   const results: OperandRun[] = []
   for (const scope of scopes) {
-    const [out, io] = await runSingle(cmdName, [scope], texts, flagKwargs, {
-      stdin: stdinBytes,
-    })
+    const [out, io] = await runSingle(cmdName, [scope], texts, flagKwargs, {})
     let data: Uint8Array
     try {
       data = out !== null ? await materialize(out) : new Uint8Array()

@@ -12,6 +12,10 @@
 # limitations under the License.
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+from collections.abc import Sequence
+
+from mirage.commands.spec import SPECS
+from mirage.commands.spec.flag_view import FlagView
 from mirage.io import IOResult
 from mirage.ops.types import SessionView
 from mirage.policy import PolicyDenied
@@ -23,6 +27,8 @@ from mirage.workspace.executor.builtins.constants import (
     IDENTIFIER_RE,
 )
 from mirage.workspace.executor.builtins.types import Result
+from mirage.workspace.executor.command.flags import option_error, parse_flags
+from mirage.workspace.executor.command.types import ParsedCommand
 from mirage.workspace.mount.namespace import Namespace
 from mirage.workspace.types import ExecutionNode
 
@@ -95,6 +101,33 @@ def abs_path(arg: str | PathSpec, cwd: str) -> str:
     if isinstance(arg, PathSpec):
         return arg.virtual
     return resolve_path(arg, cwd)
+
+
+def parse_line(
+    cmd: str, args: list[str | PathSpec], cwd: str
+) -> tuple[ParsedCommand, FlagView, Result | None]:
+    """Parse a builtin's words with its spec, the way getopt_long does.
+
+    Options may follow operands until ``--``, long options take their
+    unique abbreviations, and a bad one is refused in GNU's words with
+    the ``Try`` line. The operands keep the PathSpecs the classifier made.
+
+    Args:
+        cmd (str): the builtin's name.
+        args (list[str | PathSpec]): the classified words after the name.
+        cwd (str): the session working directory.
+    """
+    spec = SPECS[cmd]
+    parsed = parse_flags(args, spec, cmd, cwd)
+    refused = option_error(cmd, parsed)
+    if refused is not None:
+        message, code = refused
+        return (
+            parsed,
+            FlagView({}, spec=spec),
+            fail(cmd, message.decode(), code),
+        )
+    return parsed, FlagView(parsed.flag_kwargs, spec=spec), None
 
 
 def split_flags(
@@ -196,13 +229,13 @@ def split_value_flags(
 
 async def expand_operands(
     namespace: Namespace,
-    operands: list[str | PathSpec],
+    operands: Sequence[str | PathSpec],
 ) -> list[PathSpec]:
     """Coerce operands to PathSpec and expand glob patterns per mount.
 
     Args:
         namespace (Namespace): addressing authority (mount lookup).
-        operands (list[str | PathSpec]): positional operands.
+        operands (Sequence[str | PathSpec]): positional operands.
     """
     out: list[PathSpec] = []
     for item in operands:

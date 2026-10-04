@@ -33,7 +33,7 @@ export const BUILDER: Builder = {
     const write = requireOp(ops.write, 'write')
     const exists = requireOp(ops.exists, 'exists')
     const resolved = await resolveGlobOf(ops)(accessor, paths, idx)
-    const createOnly = new FlagView(opts.flags, specOf('touch')).asBool('c')
+    const createOnly = new FlagView(opts.flags, specOf('touch')).asBool('no_create')
     const writes: Record<string, Uint8Array> = {}
     const errors: string[] = []
     for (const p of resolved) {

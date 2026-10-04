@@ -214,6 +214,16 @@
   },
   "options": [
     {
+      "long": "--ignore-fail-on-non-empty",
+      "type": "bool"
+    },
+    {
+      "long": "--parents",
+      "short": "-p",
+      "type": "bool"
+    },
+    {
+      "long": "--verbose",
       "short": "-v",
       "type": "bool"
     }

@@ -22,6 +22,7 @@ from mirage.commands.builtin.utils.copy import path_exists
 from mirage.commands.config import CommandOpts
 from mirage.commands.errors import UsageError
 from mirage.commands.spec import SPECS
+from mirage.commands.spec.constants import OPERAND
 from mirage.commands.spec.flag_view import FlagView
 from mirage.commands.spec.standard import version_line
 from mirage.commands.spec.types import FlagValue
@@ -83,8 +84,9 @@ DEST_EXIT = 2
 # before the archive (a self-extractor stub) push it later, and Info-ZIP
 # reports the difference as a warning (exit 1) and carries on with every
 # offset shifted, or as an error (exit 2) when bytes are missing instead.
-# Info-ZIP prints this on stdout under -t and between the header and
-# the rows under -Z; mirage keeps every diagnostic on stderr.
+# Info-ZIP prints this on stdout under -t, after the archive line, and
+# between the header and the rows under -Z, where mirage keeps it on
+# stderr.
 EXTRA_BYTES = (
     "warning [{0}]:  {1} extra byte{2} at beginning or within "
     "zipfile\n  (attempting to process anyway)\n"
@@ -94,6 +96,13 @@ MISSING_BYTES = (
     "  (attempting to process anyway)\n"
 )
 ZERO_TESTED = "Caution:  zero files tested in {0}.\n"
+# What -t says when every member it tested was sound: the whole archive,
+# or the members a pattern chose (Info-ZIP 6.00).
+TESTED_ALL = "No errors detected in compressed data of {0}.\n"
+TESTED_SOME = "No errors detected in {0} for the {1} file{2} tested.\n"
+TESTING = "    testing: {0:<22}   OK\n"
+# A -d in a mode that writes nothing (Info-ZIP 6.00).
+D_IGNORED = "caution:  not extracting; -d ignored\n"
 WARN_EXIT = 1
 MISSING_EXIT = 2
 # Info-ZIP answers an option it does not know with its usage block and
@@ -419,11 +428,15 @@ async def unzip(
         )
     data = await read_bytes(archive_path)
     if not _central_directory_tiles(data):
-        return None, _refusal(data, archive_path.virtual, zipinfo=Z, pipe=p)
+        return None, _refusal(data, archive_path.raw_path, zipinfo=Z, pipe=p)
     try:
         zf = zipfile.ZipFile(io.BytesIO(data), "r")
     except zipfile.BadZipFile:
-        return None, _refusal(data, archive_path.virtual, zipinfo=Z, pipe=p)
+        return None, _refusal(data, archive_path.raw_path, zipinfo=Z, pipe=p)
+    slack = _offset_slack(data)
+    warning, floor = (
+        _slack_warning(slack, archive_path.raw_path) if slack else ("", 0)
+    )
     with zf:
         out, result = await _run(
             zf,
@@ -448,19 +461,23 @@ async def unzip(
             h,
             cwd,
             relay,
+            warning if t and not Z else "",
         )
-    slack = _offset_slack(data)
-    if slack == 0:
+    # A mode that writes nothing says so about -d first.
+    caution = (
+        D_IGNORED if d is not None and (Z or t or p or args_l or v) else ""
+    )
+    on_stderr = "" if t and not Z else warning
+    if not caution and not on_stderr and not slack:
         return out, result
-    warning, floor = _slack_warning(slack, archive_path.virtual)
-    stderr = warning.encode() + (
+    stderr = (caution + on_stderr).encode() + (
         bytes(result.stderr)
         if isinstance(result.stderr, (bytes, bytearray))
         else b""
     )
     return out, IOResult(
         exit_code=max(result.exit_code, floor),
-        stderr=stderr,
+        stderr=stderr or None,
         writes=result.writes,
     )
 
@@ -488,6 +505,7 @@ async def _run(
     h: bool,
     cwd: PathSpec | str,
     relay: bool,
+    warning: str = "",
 ) -> tuple[ByteSource | None, IOResult]:
     """One mode over an opened archive: list, test, pipe, zipinfo, extract.
 
@@ -517,6 +535,8 @@ async def _run(
         h (bool): ``-h``.
         cwd (PathSpec | str): the session's working directory.
         relay (bool): dispatch-relayed doors.
+        warning (str): the archive's offset warning, which -t prints on
+            stdout after the archive line.
     """
     infos = zf.infolist()
     selected, unmatched, unmatched_excludes = _select(infos, members, excludes)
@@ -560,17 +580,22 @@ async def _run(
             return listing, IOResult(exit_code=11)
         return listing, IOResult()
     if t:
-        # GNU -t reports unmatched patterns on stdout; an unmatched
-        # member counts as an error, an unmatched exclude does not, and
-        # a filter that leaves nothing is its own caution.
+        # GNU -t heads its report with the archive as typed and reports
+        # unmatched patterns on stdout; an unmatched member counts as an
+        # error, an unmatched exclude does not, and a filter that leaves
+        # nothing is its own caution.
+        typed_archive = archive_path.raw_path
+        head = ("" if q else f"Archive:  {typed_archive}\n") + warning
         cautions = _cautions(unmatched, unmatched_excludes)
         if unmatched:
-            msg = cautions + (
-                f"At least one error was detected in {archive_path.virtual}.\n"
+            msg = (
+                head
+                + cautions
+                + (f"At least one error was detected in {typed_archive}.\n")
             )
             return msg.encode(), IOResult(exit_code=11)
         if nothing_left:
-            msg = cautions + ZERO_TESTED.format(archive_path.virtual)
+            msg = head + cautions + ZERO_TESTED.format(typed_archive)
             return msg.encode(), IOResult(exit_code=11)
         if filtered:
             bad = None
@@ -585,9 +610,17 @@ async def _run(
         else:
             bad = zf.testzip()
         if bad is not None:
-            return f"first bad file: {bad}\n".encode(), IOResult()
-        msg = cautions + f"No errors detected in {archive_path.virtual}\n"
-        return msg.encode(), IOResult()
+            return (head + f"first bad file: {bad}\n").encode(), IOResult()
+        tested = (
+            "" if q else "".join(TESTING.format(i.filename) for i in selected)
+        )
+        count = len(selected)
+        tail = (
+            TESTED_SOME.format(typed_archive, count, "" if count == 1 else "s")
+            if filtered
+            else TESTED_ALL.format(typed_archive)
+        )
+        return (head + tested + cautions + tail).encode(), IOResult()
     cautions = _cautions(unmatched, unmatched_excludes)
     exit_code = 11 if unmatched or nothing_left else 0
     if p:
@@ -727,6 +760,41 @@ def parse_flags(flags: Mapping[str, FlagValue]) -> UnzipFlags:
     )
 
 
+def _patterns(
+    flags: Mapping[str, FlagValue], texts: list[str], excludes: tuple[str, ...]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The member patterns and the ``-x`` patterns, as Info-ZIP reads them.
+
+    ``-x`` takes every operand typed after it, up to a ``-d``, so the
+    operands are placed by where the flag tape recorded them; the first
+    is the archive. A line whose operands the tape does not account for
+    keeps one pattern per ``-x``.
+
+    Args:
+        flags (Mapping[str, FlagValue]): the parsed flag bag.
+        texts (list[str]): the operands after the archive.
+        excludes (tuple[str, ...]): every ``-x`` value, in order.
+    """
+    tape = FlagView(flags, spec=SPECS["unzip"]).occurrences("x", "d", OPERAND)
+    if sum(name == OPERAND for name, _ in tape) != len(texts) + 1:
+        return tuple(texts), excludes
+    members: list[str] = []
+    excluded: list[str] = []
+    listing = False
+    index = -1
+    for name, value in tape:
+        if name == OPERAND:
+            if index >= 0:
+                (excluded if listing else members).append(texts[index])
+            index += 1
+        elif name == "x" and isinstance(value, str):
+            excluded.append(value)
+            listing = True
+        elif name == "d":
+            listing = False
+    return tuple(members), tuple(excluded)
+
+
 async def unzip_generic(
     paths: list[PathSpec],
     texts: list[str],
@@ -738,13 +806,14 @@ async def unzip_generic(
     relay: bool = False,
 ) -> tuple[ByteSource | None, IOResult]:
     parsed = parse_flags(opts.flags)
+    members, excludes = _patterns(opts.flags, texts, parsed.excludes)
     return await unzip(
         paths,
         read_bytes=read_bytes,
         write_bytes=write_bytes,
         mkdir_fn=mkdir_fn,
         stat=stat,
-        members=tuple(texts),
+        members=members,
         o=parsed.overwrite,
         args_l=parsed.list_only,
         d=parsed.dest,
@@ -752,7 +821,7 @@ async def unzip_generic(
         p=parsed.to_stdout,
         t=parsed.test_only,
         v=parsed.verbose,
-        x=parsed.excludes,
+        x=excludes,
         Z=parsed.zipinfo,
         args_1=parsed.names_only,
         args_2=parsed.names_headers,

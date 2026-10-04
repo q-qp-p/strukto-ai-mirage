@@ -830,11 +830,11 @@ async def _route_argv(
     # ── metadata commands (namespace-routed: resolve-then-setattr with
     #    overlay fallback; they run their own link follow) ──
     if name == "chmod":
-        return await handle_chmod(namespace, dispatch, operands)
+        return await handle_chmod(namespace, dispatch, session, operands)
     if name == "chown":
-        return await handle_chown(namespace, dispatch, operands)
+        return await handle_chown(namespace, dispatch, session, operands)
     if name == "chgrp":
-        return await handle_chgrp(namespace, dispatch, operands)
+        return await handle_chgrp(namespace, dispatch, session, operands)
     if name == "touch":
         return await handle_touch(namespace, dispatch, session, operands)
 

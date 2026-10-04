@@ -165,6 +165,7 @@ async def cp(
             if links is not None and opts.dispatch is not None
             else None
         ),
+        stdin=opts.stdin,
     )
 
 

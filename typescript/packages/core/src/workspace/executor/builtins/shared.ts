@@ -12,6 +12,8 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import { specOf } from '../../../commands/spec/builtins.ts'
+import { FlagView } from '../../../commands/spec/flag_view.ts'
 import { IOResult } from '../../../io/types.ts'
 import type { SessionView } from '../../../ops/types.ts'
 import type { PolicyDenied } from '../../../policy/errors.ts'
@@ -22,6 +24,8 @@ import { resolvePath } from '../../../utils/path.ts'
 import { rstripSlash } from '../../../utils/slash.ts'
 import type { Namespace } from '../../mount/namespace/namespace.ts'
 import { ExecutionNode } from '../../types.ts'
+import { optionError, parseFlags } from '../command/flags.ts'
+import type { ParsedCommand } from '../command/types.ts'
 import { COUNT_WORD_RE, IDENTIFIER_RE } from './constants.ts'
 import type { Result } from './types.ts'
 
@@ -74,6 +78,32 @@ export function finish(cmd: string, errors: string[], io?: IOResult): Result {
     return result(cmd, { exitCode: 1, stderr: errors.join(''), ...carried })
   }
   return result(cmd, carried)
+}
+
+/**
+ * Parse a builtin's words with its spec, the way getopt_long does: options
+ * may follow operands until `--`, long options take their unique
+ * abbreviations, and a bad one is refused in GNU's words with the `Try`
+ * line. The operands keep the PathSpecs the classifier made. Mirrors
+ * Python's parse_line.
+ *
+ * @param cmd - the builtin's name.
+ * @param args - the classified words after the name.
+ * @param cwd - the session working directory.
+ */
+export function parseLine(
+  cmd: string,
+  args: readonly (string | PathSpec)[],
+  cwd: string,
+): [ParsedCommand, FlagView, Result | null] {
+  const spec = specOf(cmd)
+  const parsed = parseFlags(args, spec, cmd, cwd)
+  const refused = optionError(cmd, parsed)
+  if (refused !== null) {
+    const [message, code] = refused
+    return [parsed, new FlagView({}, spec), fail(cmd, new TextDecoder().decode(message), code)]
+  }
+  return [parsed, new FlagView(parsed.flagKwargs, spec), null]
 }
 
 /**

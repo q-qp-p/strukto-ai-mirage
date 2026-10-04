@@ -111,6 +111,7 @@ export const BUILDER: Builder = {
       links === null || opts.dispatch === undefined
         ? undefined
         : transferLinksOf(links, opts.dispatch, cwd),
+      opts.stdin,
     )
   },
 }

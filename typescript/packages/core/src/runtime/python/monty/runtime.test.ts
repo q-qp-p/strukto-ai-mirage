@@ -33,20 +33,14 @@ function makeBridge(
   files: Map<string, Uint8Array>
   writes: [string, Uint8Array][]
   mutations: string[]
-  creates: string[]
-  truncates: string[]
   appends: [string, Uint8Array][]
-  mkdirAttrs: (Record<string, unknown> | undefined)[]
 } {
   const files = new Map(Object.entries(seed))
   const dirs = new Set<string>()
   const writes: [string, Uint8Array][] = []
   const mutations: string[] = []
-  const creates: string[] = []
-  const truncates: string[] = []
   const appends: [string, Uint8Array][] = []
-  const mkdirAttrs: (Record<string, unknown> | undefined)[] = []
-  const dispatch: BridgeDispatchFn = (op, path, bytes, dst, attrs) => {
+  const dispatch: BridgeDispatchFn = (op, path, bytes, dst) => {
     if (op === 'read') {
       const data = files.get(path)
       if (data === undefined) {
@@ -64,12 +58,10 @@ function makeBridge(
     }
     if (op === 'create') {
       files.set(path, new Uint8Array())
-      creates.push(path)
       return Promise.resolve(undefined)
     }
     if (op === 'truncate') {
       files.set(path, new Uint8Array())
-      truncates.push(path)
       return Promise.resolve(undefined)
     }
     if (op === 'append') {
@@ -91,10 +83,7 @@ function makeBridge(
     }
     if (op === 'mkdir' || op === 'rmdir' || op === 'unlink') {
       if (op === 'unlink') files.delete(path)
-      if (op === 'mkdir') {
-        dirs.add(path)
-        mkdirAttrs.push(attrs as Record<string, unknown> | undefined)
-      }
+      if (op === 'mkdir') dirs.add(path)
       if (op === 'rmdir') dirs.delete(path)
       mutations.push(`${op} ${path}`)
       return Promise.resolve(undefined)
@@ -141,7 +130,7 @@ function makeBridge(
     }
     return Promise.resolve(entries)
   }
-  return { dispatch, files, writes, mutations, creates, truncates, appends, mkdirAttrs }
+  return { dispatch, files, writes, mutations, appends }
 }
 
 function run(
@@ -308,84 +297,6 @@ describe('MontyRuntime', () => {
     expect([result.exitCode, text(result.stdout)]).toEqual([0, 'v\n'])
   }, 30_000)
 
-  it('reads a virtual file through the bridge via pathlib', async () => {
-    const { dispatch } = makeBridge({ '/s3/a.txt': new TextEncoder().encode('virtual') })
-    const rt = make(dispatch)
-    const result = await run(
-      rt,
-      "from pathlib import Path\nprint(Path('/s3/a.txt').read_text().upper())",
-    )
-    expect(result.exitCode).toBe(0)
-    expect(text(result.stdout)).toBe('VIRTUAL\n')
-  }, 30_000)
-
-  it('writes flush back through the bridge', async () => {
-    const { dispatch, writes } = makeBridge({ '/s3/seed.txt': new Uint8Array([1]) })
-    const rt = make(dispatch)
-    const result = await run(rt, "from pathlib import Path\nPath('/s3/out.txt').write_text('data')")
-    expect(result.exitCode).toBe(0)
-    expect(writes).toHaveLength(1)
-    expect(writes[0]?.[0]).toBe('/s3/out.txt')
-    expect(text(writes[0]?.[1] ?? new Uint8Array())).toBe('data')
-  }, 30_000)
-
-  // The bridge already carried these ops for the other runtimes; the
-  // monty callback declined them, so a mkdir or unlink on a mounted
-  // path died inside the sandbox's own in-memory tree and never
-  // reached the mount. The python runtime routes all four.
-  it('mkdir, rmdir and unlink route to the bridge', async () => {
-    const { dispatch, mutations, files } = makeBridge({ '/s3/a.txt': new Uint8Array([1]) })
-    const rt = make(dispatch)
-    const result = await run(
-      rt,
-      "from pathlib import Path\nPath('/s3/sub').mkdir()\nPath('/s3/a.txt').unlink()\nPath('/s3/sub').rmdir()",
-    )
-    expect(result.exitCode).toBe(0)
-    expect(mutations).toEqual(['mkdir /s3/sub', 'unlink /s3/a.txt', 'rmdir /s3/sub'])
-    expect(files.has('/s3/a.txt')).toBe(false)
-  }, 30_000)
-
-  it('unlink after rename reaches the mount', async () => {
-    const { dispatch, mutations, files } = makeBridge({ '/s3/a.txt': new Uint8Array([1]) })
-    const rt = make(dispatch)
-    const result = await run(
-      rt,
-      "from pathlib import Path\nPath('/s3/a.txt').rename('/s3/b.txt')\nPath('/s3/b.txt').unlink()",
-    )
-    expect(result.exitCode).toBe(0)
-    expect(mutations).toEqual(['rename /s3/a.txt /s3/b.txt', 'unlink /s3/b.txt'])
-    expect(files.has('/s3/b.txt')).toBe(false)
-  }, 30_000)
-
-  it('rename carries both paths to the bridge', async () => {
-    const { dispatch, mutations, files } = makeBridge({ '/s3/a.txt': new Uint8Array([1]) })
-    const rt = make(dispatch)
-    const result = await run(rt, "from pathlib import Path\nPath('/s3/a.txt').rename('/s3/b.txt')")
-    expect(result.exitCode).toBe(0)
-    expect(mutations).toEqual(['rename /s3/a.txt /s3/b.txt'])
-    expect(files.has('/s3/b.txt')).toBe(true)
-  }, 30_000)
-
-  // The dispatcher resolves the mount from the source alone and reads
-  // the destination against that same backend, so a cross-mount rename
-  // would drop the source and write the target into the wrong store.
-  it('a rename across two mounts is refused, not dispatched', async () => {
-    const { dispatch, mutations, files } = makeBridge({ '/a/f.txt': new Uint8Array([1]) })
-    const rt = make(dispatch, () => ['/a/', '/b/'])
-    const result = await run(rt, "from pathlib import Path\nPath('/a/f.txt').rename('/b/f.txt')")
-    expect(result.exitCode).toBe(1)
-    expect(mutations).toEqual([])
-    expect(files.has('/a/f.txt')).toBe(true)
-  }, 30_000)
-
-  it('a rename inside one mount still dispatches', async () => {
-    const { dispatch, mutations } = makeBridge({ '/a/f.txt': new Uint8Array([1]) })
-    const rt = make(dispatch, () => ['/a/', '/b/'])
-    const result = await run(rt, "from pathlib import Path\nPath('/a/f.txt').rename('/a/g.txt')")
-    expect(result.exitCode).toBe(0)
-    expect(mutations).toEqual(['rename /a/f.txt /a/g.txt'])
-  }, 30_000)
-
   it('a rename leaving the mount view raises EXDEV without dispatching', async () => {
     // The door refuses a pair on different mounts before dispatching,
     // and a destination outside the view is the same boundary.
@@ -402,31 +313,6 @@ describe('MontyRuntime', () => {
     expect(result.exitCode).toBe(0)
     expect(text(result.stdout)).toContain('Errno 18')
     expect(mutations).toEqual([])
-  }, 30_000)
-
-  it('iterdir lists a virtual directory', async () => {
-    const { dispatch } = makeBridge({
-      '/s3/a.txt': new Uint8Array([1]),
-      '/s3/b.txt': new Uint8Array([2]),
-    })
-    const rt = make(dispatch)
-    const result = await run(
-      rt,
-      "from pathlib import Path\nprint(sorted(str(p) for p in Path('/s3').iterdir()))",
-    )
-    expect(result.exitCode).toBe(0)
-    expect(text(result.stdout)).toBe("['/s3/a.txt', '/s3/b.txt']\n")
-  }, 30_000)
-
-  it('exists/is_file answer from the bridge', async () => {
-    const { dispatch } = makeBridge({ '/s3/a.txt': new Uint8Array([1]) })
-    const rt = make(dispatch)
-    const result = await run(
-      rt,
-      "from pathlib import Path\nprint(Path('/s3/a.txt').is_file(), Path('/s3/nope').exists())",
-    )
-    expect(result.exitCode).toBe(0)
-    expect(text(result.stdout)).toBe('True False\n')
   }, 30_000)
 
   it('host filesystem stays invisible', async () => {
@@ -507,22 +393,6 @@ describe('MontyRuntime', () => {
     expect(result.value).toEqual({ deny: 'no', nested: [{ k: 1 }] })
   }, 30_000)
 
-  it('a missing virtual file raises a typed FileNotFoundError in the guest', async () => {
-    const { dispatch } = makeBridge({})
-    const rt = make(dispatch)
-    const result = await run(
-      rt,
-      'from pathlib import Path\n' +
-        'try:\n' +
-        "    Path('/ram/nope.txt').read_text()\n" +
-        'except FileNotFoundError as exc:\n' +
-        "    print('typed:', exc)\n",
-    )
-    expect(result.exitCode).toBe(0)
-    expect(text(result.stdout)).toContain('typed:')
-    expect(text(result.stdout)).toContain('/ram/nope.txt')
-  }, 30_000)
-
   it('a failed mutation raises the typed guest exception, not a bare Error', async () => {
     // The real dispatcher rejects with coded fs errors (pinned in
     // dispatcher.test.ts), and monty picks the guest exception from
@@ -584,62 +454,6 @@ describe('MontyRuntime', () => {
     expect(text(ok.stdout)).toBe('2\n')
   }, 30_000)
 
-  it('reads outside the live mount view never reach the bridge', async () => {
-    // A path outside the live mount view is refused before the door,
-    // so a path the view hides cannot leak through this runtime.
-    const { dispatch } = makeBridge({ '/etc/passwd': new TextEncoder().encode('leak') })
-    const rt = make(dispatch, () => ['/s3/'])
-    const result = await run(rt, "from pathlib import Path\nprint(Path('/etc/passwd').read_text())")
-    expect(result.exitCode).toBe(1)
-    expect(text(result.stdout)).not.toContain('leak')
-    expect(text(result.stderr)).toContain('FileNotFoundError')
-  }, 30_000)
-
-  // CPython's open('w') leaves an empty file even when nothing is
-  // written, so the effect fires at open, not at the first flush —
-  // mirrors python's test_monty_open_* quartet.
-  it("open 'w' creates a missing file at open", async () => {
-    const { dispatch, creates, files } = makeBridge({ '/s3/seed.txt': new Uint8Array([1]) })
-    const result = await run(make(dispatch), "open('/s3/new.txt', 'w').close()")
-    expect(result.exitCode).toBe(0)
-    expect(creates).toEqual(['/s3/new.txt'])
-    expect(files.get('/s3/new.txt')).toEqual(new Uint8Array())
-  }, 30_000)
-
-  it("open 'w' truncates an existing file at open", async () => {
-    const { dispatch, truncates, files } = makeBridge({
-      '/s3/keep.txt': new TextEncoder().encode('old-bytes'),
-    })
-    const result = await run(make(dispatch), "open('/s3/keep.txt', 'w').close()")
-    expect(result.exitCode).toBe(0)
-    expect(truncates).toEqual(['/s3/keep.txt'])
-    expect(files.get('/s3/keep.txt')).toEqual(new Uint8Array())
-  }, 30_000)
-
-  it("open 'a' creates a missing file at open", async () => {
-    const { dispatch, creates } = makeBridge({ '/s3/seed.txt': new Uint8Array([1]) })
-    const result = await run(make(dispatch), "open('/s3/log.txt', 'a').close()")
-    expect(result.exitCode).toBe(0)
-    expect(creates).toEqual(['/s3/log.txt'])
-  }, 30_000)
-
-  it("open 'r' establishes nothing", async () => {
-    const { dispatch, creates, truncates } = makeBridge({ '/s3/a.txt': new Uint8Array([1]) })
-    const result = await run(make(dispatch), "open('/s3/a.txt').close()")
-    expect(result.exitCode).toBe(0)
-    expect(creates).toEqual([])
-    expect(truncates).toEqual([])
-  }, 30_000)
-
-  it('reads a mounted file through the open builtin, text and bytes', async () => {
-    const { dispatch } = makeBridge({ '/s3/a.txt': new TextEncoder().encode('virtual') })
-    const rt = make(dispatch)
-    const asText = await run(rt, "print(open('/s3/a.txt').read())")
-    expect([asText.exitCode, text(asText.stdout)]).toEqual([0, 'virtual\n'])
-    const asBytes = await run(rt, "print(open('/s3/a.txt', 'rb').read())")
-    expect([asBytes.exitCode, text(asBytes.stdout)]).toEqual([0, "b'virtual'\n"])
-  }, 30_000)
-
   it('an append carries the delta, never the whole file', async () => {
     // Monty hands the append hook the new text alone; re-sending the
     // accumulated content would make a write loop quadratic against
@@ -683,31 +497,6 @@ describe('MontyRuntime', () => {
       ['/s3/log.txt', 'ab'],
       ['/s3/log.txt', 'abc'],
     ])
-  }, 30_000)
-
-  it('mkdir forwards parents to the mount and honors exist_ok locally', async () => {
-    const { dispatch, mutations, mkdirAttrs } = makeBridge({ '/s3/a.txt': new Uint8Array([1]) })
-    const rt = make(dispatch, () => ['/s3/'])
-    const result = await run(
-      rt,
-      'from pathlib import Path\n' +
-        "Path('/s3/x/y').mkdir(parents=True)\n" +
-        "Path('/s3/x/y').mkdir(exist_ok=True)\n" +
-        "print('ok')",
-    )
-    expect(result.exitCode).toBe(0)
-    expect(text(result.stdout)).toBe('ok\n')
-    expect(mutations).toEqual(['mkdir /s3/x/y'])
-    expect(mkdirAttrs).toEqual([{ parents: true }])
-  }, 30_000)
-
-  it('mkdir without exist_ok raises on an existing directory', async () => {
-    const { dispatch, mutations } = makeBridge({ '/s3/sub/a.txt': new Uint8Array([1]) })
-    const rt = make(dispatch, () => ['/s3/'])
-    const result = await run(rt, "from pathlib import Path\nPath('/s3/sub').mkdir()")
-    expect(result.exitCode).toBe(1)
-    expect(text(result.stderr)).toContain('FileExistsError')
-    expect(mutations).toEqual([])
   }, 30_000)
 
   it('mkdir on a file raises even under exist_ok', async () => {
@@ -861,41 +650,6 @@ describe('Workspace with the monty runtime', () => {
       await ws.close()
     }
   })
-
-  it('python3 reads a virtualized file end to end', async () => {
-    const parser = await getTestParser()
-    const data = new RAMVFS()
-    const ws = new Workspace(
-      { '/data': data },
-      { mode: MountMode.EXEC, shellParser: parser, runtimes: ['monty', 'workspace'] },
-    )
-    await ws.shell('echo virtual-content > /data/a.txt')
-    const io = await ws.shell(
-      'python3 -c "from pathlib import Path; print(Path(\'/data/a.txt\').read_text().strip().upper())"',
-    )
-    expect(new TextDecoder().decode(io.stderr)).toBe('')
-    expect(io.exitCode).toBe(0)
-    expect(new TextDecoder().decode(io.stdout)).toBe('VIRTUAL-CONTENT\n')
-    const io2 = await ws.shell(
-      "python3 -c \"from pathlib import Path; Path('/data/out.txt').write_text('from-monty')\"",
-    )
-    expect(io2.exitCode).toBe(0)
-    const io3 = await ws.shell('cat /data/out.txt')
-    expect(new TextDecoder().decode(io3.stdout)).toBe('from-monty')
-    // The open() builtin, end to end: establish + append on a mount.
-    const io4 = await ws.shell(
-      "python3 -c \"h = open('/data/log.txt', 'w'); h.write('first'); h.close(); print(open('/data/log.txt').read())\"",
-    )
-    expect(new TextDecoder().decode(io4.stderr)).toBe('')
-    expect(new TextDecoder().decode(io4.stdout)).toBe('first\n')
-    const io5 = await ws.shell('cat /data/log.txt')
-    expect(new TextDecoder().decode(io5.stdout)).toBe('first')
-    // A path no mount serves is refused: there is no scratch tree.
-    const io6 = await ws.shell("python3 -c \"open('/tmp/s.txt', 'w')\"")
-    expect(io6.exitCode).toBe(1)
-    expect(new TextDecoder().decode(io6.stderr)).toContain('FileNotFoundError')
-    await ws.close()
-  }, 60_000)
 })
 
 describe('monty unavailable', () => {

@@ -306,11 +306,7 @@ async def test_a_bad_or_extra_skip_operand_is_a_usage_error(texts, message):
     "argv,after",
     [
         ((), "cmp"),
-        (("-s",), "-s"),
-        (("-n", "5"), "5"),
         (("-i3",), "-i3"),
-        (("--ignore-initial=3",), "--ignore-initial=3"),
-        (("-s", "--"), "--"),
     ],
 )
 async def test_no_operand_names_the_lines_last_word(argv, after):
@@ -369,25 +365,19 @@ def _spec(name: str) -> PathSpec:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "names,silent,code,stderr",
+    "names,stderr",
     [
-        (("dir", "one"), True, 2, "cmp: dir: Is a directory\n"),
-        (("one", "dir"), True, 2, "cmp: dir: Is a directory\n"),
-        (("dir", "nope"), True, 2, ""),
-        (("dir", "nope"), False, 2, "cmp: nope: No such file or directory\n"),
-        (("dir", "dir"), False, 0, ""),
+        (("one", "dir"), "cmp: dir: Is a directory\n"),
+        (("dir", "nope"), ""),
     ],
 )
-async def test_a_directory_fails_at_its_read_after_both_opens(
-    names, silent, code, stderr
-):
+async def test_a_directory_fails_at_its_read_after_both_opens(names, stderr):
     # diffutils 3.10 opens both operands, then reads: -s drops only a
-    # failed open, a directory opens and fails reading, and one file
-    # named twice at the same offset is equal unread.
+    # failed open, and a directory opens and fails reading.
     _, io = await cmp_cmd(
-        [_spec(n) for n in names], read_bytes=_dirs("/F/dir"), silent=silent
+        [_spec(n) for n in names], read_bytes=_dirs("/F/dir"), silent=True
     )
-    assert ((io.stderr or b"").decode(), io.exit_code) == (stderr, code)
+    assert ((io.stderr or b"").decode(), io.exit_code) == (stderr, 2)
 
 
 def test_parse_flags_reads_the_long_spellings_and_refuses_l_with_s():

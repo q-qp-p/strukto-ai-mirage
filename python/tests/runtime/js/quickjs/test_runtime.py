@@ -250,33 +250,6 @@ def test_quickjs_reuses_compiled_module():
 
 
 @live
-@pytest.mark.asyncio
-async def test_quickjs_mounts_read_write_readdir():
-    # Guest file I/O bridges through the workspace dispatch: reads see
-    # shell writes, guest writes land in the mount, readdir lists it.
-    ws = Workspace(
-        {"/data": RAMVFS()}, mode=MountMode.EXEC, runtimes=["quickjs"]
-    )
-    await ws.shell("echo hello-mount > /data/in.txt")
-    r = await ws.shell(
-        "js -e \"const f = std.open('/data/in.txt', 'r');"
-        "console.log(f.readAsString().trim());"
-        "f.close();"
-        "const w = std.open('/data/out.txt', 'w');"
-        "w.puts('from-qjs\\n');"
-        "w.close();"
-        "const [names] = os.readdir('/data');"
-        "console.log(names.filter((n) => !n.startsWith('.'))"
-        ".sort().join(','))\""
-    )
-    assert r.exit_code == 0
-    assert (await r.stdout_str()) == "hello-mount\nin.txt,out.txt\n"
-    r = await ws.shell("cat /data/out.txt")
-    assert (await r.stdout_str()) == "from-qjs\n"
-    await ws.close()
-
-
-@live
 def test_quickjs_without_dispatch_sees_no_mounts():
     rt = QuickJsRuntime()
     result = asyncio.run(

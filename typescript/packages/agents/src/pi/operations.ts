@@ -95,7 +95,7 @@ export function mirageOperations(
   const versions = new FileVersionTracker(ws, options.staleWriteProtection ?? true, sessionId)
   const vfs = versions.vfs
   const read: ReadOperations = {
-    readFile: (absolutePath: string) => versions.read(absolutePath),
+    readFile: async (absolutePath: string) => Buffer.from(await versions.read(absolutePath)),
     access: async (absolutePath: string) => {
       await vfs.stat(absolutePath)
     },
@@ -112,7 +112,7 @@ export function mirageOperations(
   }
 
   const edit: EditOperations = {
-    readFile: (absolutePath: string) => versions.readForEdit(absolutePath),
+    readFile: async (absolutePath: string) => Buffer.from(await versions.readForEdit(absolutePath)),
     writeFile: (absolutePath: string, content: string) => versions.writeEdit(absolutePath, content),
     access: read.access,
   }
@@ -159,7 +159,7 @@ export function mirageOperations(
 
   const grep: GrepOperations = {
     isDirectory: async (absolutePath: string) => vfs.isDir(absolutePath),
-    readFile: async (absolutePath: string) => (await versions.read(absolutePath)).toString('utf-8'),
+    readFile: async (absolutePath: string) => decode(await versions.read(absolutePath)),
   }
 
   const find: FindOperations = {

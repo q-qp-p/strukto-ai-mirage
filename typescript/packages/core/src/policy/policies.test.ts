@@ -120,6 +120,12 @@ class DenyBigResults implements Policy {
   }
 }
 
+class SuppressCapacity implements Policy {
+  postOps(ctx: OpsResultContext): Action | null {
+    return ctx.op === 'statfs' ? { kind: 'deny', reason: 'no capacity' } : null
+  }
+}
+
 class ReadOnlyProd implements Policy {
   preOps(ctx: OpsContext): Action | null {
     if (ctx.write && ctx.path.virtual.startsWith('/data/prod/')) {
@@ -184,7 +190,7 @@ describe('Policies', () => {
   it('registry seeds the mount-root policy', async () => {
     const reg = registry()
     const deny = await reg.policies.preCommand(ctx('rm', [path('/data')], reg))
-    expect(deny?.reason).toContain('Device or resource busy')
+    expect(deny?.reason).toContain("cannot remove '/data'")
   })
 
   it('builtin runs first, then user policies in order', async () => {
@@ -192,7 +198,7 @@ describe('Policies', () => {
     policies.add(new RulePolicy({ reason: 'user rule', commands: ['rm'] }))
     // Both match `rm /data`; the built-in GNU message wins by order.
     let deny = await policies.preCommand(ctx('rm', [path('/data')]))
-    expect(deny?.reason).toContain('Device or resource busy')
+    expect(deny?.reason).toContain('Is a directory')
     // Only the user rule matches `rm /data/x`.
     deny = await policies.preCommand(ctx('rm', [path('/data/x')]))
     expect(deny).toEqual({ kind: 'deny', reason: 'user rule', policy: 'RulePolicy' })
@@ -299,6 +305,22 @@ describe('Policies', () => {
 })
 
 describe('workspace policies', () => {
+  it('a postOps deny suppresses a capacity reply', async () => {
+    const ws = executableWorkspace()
+    try {
+      await ws.shell('touch /data/f')
+      ws.policies.add(new SuppressCapacity())
+      const result = await ws.shell('stat -f -c %b /data/f')
+      expect(result.exitCode).toBe(1)
+      expect(new TextDecoder().decode(result.stdout)).toBe('')
+      expect(new TextDecoder().decode(result.stderr)).toBe(
+        "stat: cannot read file system information for '/data/f': Permission denied\n",
+      )
+    } finally {
+      await ws.close()
+    }
+  })
+
   it('guards refuse before backend I/O and leave other paths open', async () => {
     const ws = executableWorkspace([
       {

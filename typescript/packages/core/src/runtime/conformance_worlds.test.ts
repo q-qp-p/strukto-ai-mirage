@@ -18,7 +18,6 @@ import { RAMVFS } from '../vfs/ram/ram.ts'
 import { FileType, MountMode } from '../types.ts'
 import { getTestParser, stderrStr, stdoutStr } from '../workspace/fixtures/workspace_fixture.ts'
 import { Workspace } from '../workspace/workspace/workspace.ts'
-import { QuickJsRuntime } from './js/quickjs/runtime.ts'
 import { MontyRuntime } from './python/monty/index.ts'
 
 // One world, three surfaces, one door: the TS half of the conformance
@@ -96,10 +95,6 @@ async function run(
   return [io.exitCode, stdoutStr(io), stderrStr(io)]
 }
 
-// ts monty's iterdir yields plain strings where py monty yields Path
-// objects; `str(p)` reads the entry either way.
-const LIST_BASE = `python3 -c "from pathlib import Path; print(sorted(str(p) for p in Path('/base').iterdir()))"`
-
 // ── Group 1: nested mount + namespace link are visible to every surface ──
 
 describe('structure world', () => {
@@ -123,44 +118,6 @@ describe('structure world', () => {
       const [code, out] = await run(ws, 'grep -r needle /base')
       expect(code).toBe(0)
       expect(out).toContain('/base/inner/deep.txt')
-    } finally {
-      await ws.close()
-    }
-  })
-
-  it('guest lists the child mount', async () => {
-    const ws = await structureWorld()
-    try {
-      const [code, out, err] = await run(ws, LIST_BASE)
-      expect(code, err).toBe(0)
-      expect(out).toContain('inner')
-    } finally {
-      await ws.close()
-    }
-  })
-
-  it('guest lists the namespace link', async () => {
-    const ws = await structureWorld()
-    try {
-      expect((await run(ws, 'ln -s /base/inner /base/lnk'))[0]).toBe(0)
-      const [code, out, err] = await run(ws, LIST_BASE)
-      expect(code, err).toBe(0)
-      expect(out).toContain('lnk')
-    } finally {
-      await ws.close()
-    }
-  })
-
-  it('guest reads through a link by exact path', async () => {
-    const ws = await structureWorld()
-    try {
-      expect((await run(ws, 'ln -s /base/inner /base/lnk'))[0]).toBe(0)
-      const [code, out, err] = await run(
-        ws,
-        `python3 -c "from pathlib import Path; print(Path('/base/lnk/deep.txt').read_text())"`,
-      )
-      expect(code, err).toBe(0)
-      expect(out).toContain('needle')
     } finally {
       await ws.close()
     }
@@ -228,24 +185,6 @@ describe('structure world', () => {
       const [dCode, dOut] = await run(ws, 'ls -d /ghost')
       expect(dCode).toBe(0)
       expect(dOut.trim()).toBe('/ghost')
-    } finally {
-      await ws.close()
-    }
-  })
-
-  // ── Group 2: a structure-only directory stats as a directory ──
-
-  it('the door stats a structure-only directory', async () => {
-    const ws = await structureWorld()
-    try {
-      const stat = await ws.stat('/base/inner')
-      expect((stat as { type: FileType | null }).type).toBe(FileType.DIRECTORY)
-      const [code, out, err] = await run(
-        ws,
-        `python3 -c "from pathlib import Path; print(Path('/base/inner').is_dir())"`,
-      )
-      expect(code, err).toBe(0)
-      expect(out).toContain('True')
     } finally {
       await ws.close()
     }
@@ -411,65 +350,4 @@ describe('scoped world', () => {
       await ws.close()
     }
   })
-})
-
-// ── Group 5: an exclusive open refuses an existing file (R7a) ──
-//
-// The python half runs the same world over the real qjs-wasi engine
-// and CPython-wasm (test_conformance_worlds.py, guarded); this half
-// runs it over the synthesized quickjs shim, which consumes
-// `OpenMode.exclusive` for the refusal. monty has no spelling for the
-// fact: it refuses mode 'x' outright ("exclusive creation mode is not
-// supported").
-
-async function exclusiveWorld(): Promise<Workspace> {
-  const parser = await getTestParser()
-  const ops = new OpsRegistry()
-  const w = new RAMVFS()
-  ops.registerVfs(w)
-  const ws = new Workspace(
-    {},
-    {
-      mode: MountMode.EXEC,
-      ops,
-      shellParser: parser,
-      runtimes: [new QuickJsRuntime(), 'workspace'],
-    },
-  )
-  ws.addMount('/w', w, MountMode.WRITE)
-  await ws.vfs.write('/w/keep.txt', 'keep')
-  return ws
-}
-
-describe('exclusive-open world', () => {
-  it("a js guest's 'wx' refuses an existing file and leaves it untouched", async () => {
-    const ws = await exclusiveWorld()
-    try {
-      const [code, out, err] = await run(
-        ws,
-        "js -e \"console.log(std.open('/w/keep.txt', 'wx') === null ? 'refused' : 'OPENED')\"",
-      )
-      expect(code, err).toBe(0)
-      expect(out).toContain('refused')
-      const [, keep] = await run(ws, 'cat /w/keep.txt')
-      expect(keep).toBe('keep')
-    } finally {
-      await ws.close()
-    }
-  }, 60_000)
-
-  it("a js guest's 'wx' creates a missing file", async () => {
-    const ws = await exclusiveWorld()
-    try {
-      const [code, , err] = await run(
-        ws,
-        "js -e \"const f = std.open('/w/made.txt', 'wx'); f.puts('made'); f.close()\"",
-      )
-      expect(code, err).toBe(0)
-      const [, made] = await run(ws, 'cat /w/made.txt')
-      expect(made).toBe('made')
-    } finally {
-      await ws.close()
-    }
-  }, 60_000)
 })

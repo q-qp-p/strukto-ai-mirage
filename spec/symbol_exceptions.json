@@ -120,6 +120,11 @@
    "python_only": {
     "_s3_accessor": "Python's S3 client is the optional 's3' extra, so its accessor is built behind the install hint; TypeScript's S3 SDK is a core dependency."
    }
+  },
+  "commands/builtin/generic/tar/tar": {
+   "python_only": {
+    "ZeroTail": "Python reads archives through tarfile, which refuses a stream that ends inside a member's data; ZeroTail feeds it zeros past the cut. TypeScript parses the blocks itself and sees the short member directly."
+   }
   }
  }
 }

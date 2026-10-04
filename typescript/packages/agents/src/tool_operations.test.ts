@@ -52,6 +52,16 @@ describe('grep', () => {
 })
 
 describe('edit', () => {
+  it('keeps a UTF-8 byte order mark', async () => {
+    const encoder = new TextEncoder()
+    await ws.vfs.write('/bom.txt', encoder.encode('\uFEFFhello world'))
+    const result = await ops.edit('/bom.txt', 'world', 'there')
+    expect(result.isError).toBeUndefined()
+    expect(await ws.vfs.read('/bom.txt', { raw: true })).toEqual(
+      encoder.encode('\uFEFFhello there'),
+    )
+  })
+
   it('refuses an edit to a file that changed since it was read', async () => {
     await ws.vfs.write('/a.txt', 'hello world')
     await ops.read('/a.txt')

@@ -263,7 +263,9 @@ def test_tac_good_then_missing():
 def test_rev_good_then_missing():
     out, err, code = _run(_make_numbered_ws(), "rev /a/f.txt /a/missing.txt")
     assert out == "1\n2\n"
-    assert err == "rev: /a/missing.txt: No such file or directory\n"
+    assert (
+        err == "rev: cannot open /a/missing.txt: No such file or directory\n"
+    )
     assert code == 1
 
 

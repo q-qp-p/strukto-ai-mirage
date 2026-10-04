@@ -213,7 +213,23 @@ export async function writeOutput(
       return [null, new IOResult({ exitCode: 1, stderr, writes, cache })]
     }
   }
-  for (const path of paths) {
+  for (const [index, path] of paths.entries()) {
+    // A store keeps a key over a directory or under a file, where an open
+    // would fail, so the open is probed for every output, not only the ones
+    // --output-error=exit probed above. A missing parent is the write's to
+    // refuse, which a keyed store makes as a redirect does.
+    let refusal: FsError | null = null
+    if (stat !== undefined && !parsed.stopOnError) {
+      try {
+        refusal = await openRefusal(stat, path, paths.slice(0, index))
+      } catch (err) {
+        console.warn(`tee: probing ${path.virtual} failed: ${String(err)}`)
+      }
+    }
+    if (refusal !== null && refusal.code !== 'ENOENT') {
+      errors.push(errorLine(path, refusal))
+      continue
+    }
     let data: Uint8Array | null
     try {
       data = await writeOne(path, raw, parsed, stream, write, append)

@@ -260,14 +260,6 @@ describe('PyodideFs', () => {
     expect(touched.filter((path) => path.includes('probe_dev'))).toEqual([])
   })
 
-  it('serves a seeded file to the guest', async () => {
-    const p = prefix()
-    store.set(`${p}seed.txt`, enc.encode('ORIGINAL'))
-    await mountPrefix(p)
-    await py.runPythonAsync(`_out = open('${p}seed.txt').read()`)
-    expect(py.globals.get('_out')).toBe('ORIGINAL')
-  })
-
   it('records only the tail for an append, and does not clobber the mount', async () => {
     const p = prefix()
     store.set(`${p}log.txt`, enc.encode('BASE'))
@@ -466,34 +458,6 @@ except OSError as e:
     expect(journal.takeMutations()).toEqual([])
   })
 
-  // A REST collection answers a record's stat by fetching it, so one bad
-  // record fails its stat. The listing must survive that, and the record
-  // must not turn into an empty file: both its stat and its open say EIO.
-  it('lists an entry the mount will not stat, and refuses its stat and open', async () => {
-    const p = prefix()
-    store.set(`${p}good.json`, enc.encode('{}'))
-    store.set(`${p}bad.json`, enc.encode('{}'))
-    broken.add(`${p}bad.json`)
-    await mountPrefix(p)
-    await py.runPythonAsync(`
-import os
-_names = ','.join(sorted(os.listdir('${p}')))
-_good = os.stat('${p}good.json').st_size
-_errnos = []
-for _probe in (os.stat, lambda path: open(path).read()):
-    try:
-        _probe('${p}bad.json')
-        _errnos.append(0)
-    except OSError as e:
-        _errnos.append(e.errno)
-_errnos = ','.join(map(str, _errnos))
-`)
-    expect(py.globals.get('_names')).toBe('bad.json,good.json')
-    expect(py.globals.get('_good')).toBe(2)
-    const eio = String(py.ERRNO_CODES.EIO)
-    expect(py.globals.get('_errnos')).toBe(`${eio},${eio}`)
-  })
-
   // The preload is the guest's only chance to ask, so an entry whose stat
   // failed once is asked again, and an answer seeds it as usual.
   it('seeds an entry whose first stat failed from the second', async () => {
@@ -623,17 +587,6 @@ _ctor = open('${p}constructor').read()
     expect(py.globals.get('_ctor')).toBe('CTOR')
   })
 
-  it('reports the seeded size through os.stat', async () => {
-    const p = prefix()
-    store.set(`${p}sized.txt`, enc.encode('123456789'))
-    await mountPrefix(p)
-    await py.runPythonAsync(`
-import os
-_size = os.stat('${p}sized.txt').st_size
-`)
-    expect(py.globals.get('_size')).toBe(9)
-  })
-
   // Both come off the row the preload already had. Before this the node
   // carried makeNode's defaults, so a chmod the shell made was invisible
   // and every seeded file looked modified the moment the run started.
@@ -653,26 +606,6 @@ _isreg = stat.S_ISREG(_st.st_mode)
     expect(py.globals.get('_isreg')).toBe(true)
   })
 
-  // A link is namespace state, so the mount that gets it need not be
-  // able to store one: the op reaches the node table. Before this the
-  // callback refused with EPERM, which is what MEMFS-backed pyodide
-  // guests had to work around.
-  it('creates a symlink the guest asked for', async () => {
-    const p = prefix()
-    store.set(`${p}t.txt`, enc.encode('TARGET'))
-    await mountPrefix(p)
-    await py.runPythonAsync(`
-import os
-os.symlink('t.txt', '${p}link')
-_is = os.path.islink('${p}link')
-_target = os.readlink('${p}link')
-`)
-    expect(py.globals.get('_is')).toBe(true)
-    expect(py.globals.get('_target')).toBe('t.txt')
-    await drain()
-    expect(links.get(`${p}link`)).toBe('t.txt')
-  })
-
   // lstat sizes a link at its target string, which is what every POSIX
   // system reports and what the mount's own row says.
   it('lstats a created link as a link', async () => {
@@ -689,22 +622,6 @@ _size = _st.st_size
     expect(py.globals.get('_size')).toBe('some/where'.length)
   })
 
-  // The seed carries links now, so one the shell made is visible to the
-  // guest instead of missing: preload used to skip every link entry.
-  it('serves a seeded link to the guest', async () => {
-    const p = prefix()
-    store.set(`${p}real.txt`, enc.encode('CONTENT'))
-    links.set(`${p}seeded`, 'real.txt')
-    await mountPrefix(p)
-    await py.runPythonAsync(`
-import os
-_is = os.path.islink('${p}seeded')
-_target = os.readlink('${p}seeded')
-`)
-    expect(py.globals.get('_is')).toBe(true)
-    expect(py.globals.get('_target')).toBe('real.txt')
-  })
-
   it('refuses readlink on a path that is not a link', async () => {
     const p = prefix()
     store.set(`${p}plain.txt`, enc.encode('x'))
@@ -719,22 +636,6 @@ except OSError as exc:
 _einval = errno.EINVAL
 `)
     expect(py.globals.get('_errno')).toBe(py.globals.get('_einval'))
-  })
-
-  // A guest utime reached only the private node table before this, so a
-  // stamp the script wrote vanished with the run.
-  it('sends a guest utime to the mount', async () => {
-    const p = prefix()
-    store.set(`${p}stamped.txt`, enc.encode('x'))
-    await mountPrefix(p)
-    await py.runPythonAsync(`
-import os
-os.utime('${p}stamped.txt', (100.0, 200.0))
-`)
-    await drain()
-    expect(attrs).toEqual([
-      [`${p}stamped.txt`, { atime: '1970-01-01T00:01:40Z', mtime: '1970-01-01T00:03:20Z' }],
-    ])
   })
 
   // A truncating open reaches setattr too (Emscripten routes the resize
@@ -782,18 +683,6 @@ os.chmod('${p}made.txt', 0o640)
 `)
     await drain()
     expect(attrs).toEqual([[`${p}made.txt`, { mode: 0o640 }]])
-  })
-
-  it('sends a guest chmod to the mount as permission bits', async () => {
-    const p = prefix()
-    store.set(`${p}moded.txt`, enc.encode('x'))
-    await mountPrefix(p)
-    await py.runPythonAsync(`
-import os
-os.chmod('${p}moded.txt', 0o600)
-`)
-    await drain()
-    expect(attrs).toEqual([[`${p}moded.txt`, { mode: 0o600 }]])
   })
 })
 

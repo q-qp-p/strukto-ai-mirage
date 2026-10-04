@@ -40,23 +40,15 @@ async def _empty(_p):
         yield b""
 
 
-def test_parse_flags_reads_the_exit_warn_axis():
-    # Value validation lives in the spec's choices=. Only the exit/warn
-    # axis is observable here: the -nopipe half distinguishes a pipe sink
-    # from a file sink, and every operand tee writes is a file.
-    for mode in ("warn", "warn-nopipe"):
-        assert parse_flags({"output_error": mode}) == TeeFlags(
-            stop_on_error=False
-        )
-    for mode in ("exit", "exit-nopipe"):
-        assert parse_flags({"output_error": mode}) == TeeFlags(
-            stop_on_error=True
-        )
-
-
-def test_a_bare_output_error_means_warn():
-    # GNU 9.7.
-    assert parse_flags({"output_error": True}) == TeeFlags(stop_on_error=False)
+@pytest.mark.parametrize(
+    "mode,stop",
+    [("warn-nopipe", False), ("exit", True), (True, False)],
+)
+def test_parse_flags_reads_the_exit_warn_axis(mode, stop):
+    # Only the exit/warn axis is observable: the -nopipe half tells a pipe
+    # sink from a file sink, and every operand tee writes is a file. A
+    # bare --output-error means warn (GNU 9.7).
+    assert parse_flags({"output_error": mode}) == TeeFlags(stop_on_error=stop)
 
 
 @pytest.mark.asyncio

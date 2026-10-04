@@ -537,6 +537,7 @@ export const FAILURE_WORDING: ReadonlyMap<string, readonly [string | null, strin
     ['csplit', [CANNOT_OPEN, null]],
     ['fmt', [CANNOT_OPEN, null]],
     ['head', [CANNOT_OPEN, 'error reading {quoted}: {strerror}']],
+    ['rev', ['cannot open {bare}: {strerror}', null]],
     ['sed', ["can't read {bare}: {strerror}", 'read error on {bare}: {strerror}']],
     ['split', [CANNOT_OPEN, null]],
     ['stat', ['cannot statx {quoted}: {strerror}', 'cannot statx {quoted}: {strerror}']],

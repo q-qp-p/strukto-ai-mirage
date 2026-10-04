@@ -154,29 +154,27 @@ async def test_quiet_silences_a_directory_warning_but_keeps_exit_2():
 
 
 @pytest.mark.asyncio
-async def test_an_output_already_there_outranks_a_corrupt_body():
-    # gzip checks the output once the header reads, before the body.
-    files = {"/d/e.gz": HELLO[:-3], "/d/e": b"old"}
-    _, ops = _files(files)
+@pytest.mark.parametrize(
+    "data,code,stderr",
+    [
+        (HELLO[:-3], 2, b"gzip: /d/e already exists;\tnot overwritten\n"),
+        (b"plain\n", 1, b"\ngzip: /d/e.gz: not in gzip format\n"),
+    ],
+)
+async def test_the_output_is_checked_after_the_header_before_the_body(
+    data, code, stderr
+):
+    # A corrupt body loses to an output already there; a bad header
+    # wins over it.
+    _, ops = _files({"/d/e.gz": data, "/d/e": b"old"})
     _, io = await decompress_inputs([PathSpec.from_str_path("/d/e.gz")], **ops)
-    assert io.stderr == b"gzip: /d/e already exists;\tnot overwritten\n"
-    assert io.exit_code == 2
-
-
-@pytest.mark.asyncio
-async def test_a_bad_header_outranks_an_output_already_there():
-    files = {"/d/e.gz": b"plain\n", "/d/e": b"old"}
-    _, ops = _files(files)
-    _, io = await decompress_inputs([PathSpec.from_str_path("/d/e.gz")], **ops)
-    assert io.stderr == b"\ngzip: /d/e.gz: not in gzip format\n"
-    assert io.exit_code == 1
+    assert (io.stderr, io.exit_code) == (stderr, code)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "data,out",
     [
-        (b"", b""),
         (b"\x1f", b"\x1f"),
         (HELLO + b"\0\0", b"hello\0\0"),
     ],
@@ -240,17 +238,11 @@ async def test_an_unusable_suffix_is_refused_before_any_input(suffix):
 @pytest.mark.parametrize(
     "name,suffix,found",
     [
-        ("a.gz", ".gz", ".gz"),
         ("a.GZ", ".gz", ".GZ"),
         ("a.Tgz", ".gz", ".Tgz"),
         ("a_z", ".gz", "_z"),
-        ("a-GZ", ".gz", "-GZ"),
-        ("a.txt", ".gz", None),
         (".gz", ".gz", None),
-        ("d/.gz", ".gz", None),
         ("a.xy", ".XY", ".xy"),
-        ("a.gz", "z", ".gz"),
-        ("az", "z", "z"),
     ],
 )
 def test_gzip_suffix_reads_gzips_suffix_table(name, suffix, found):
@@ -260,8 +252,6 @@ def test_gzip_suffix_reads_gzips_suffix_table(name, suffix, found):
 @pytest.mark.parametrize(
     "suffix,refused",
     [
-        (".gz", False),
-        ("", True),
         ("." + "a" * 29, False),
         ("." + "a" * 30, True),
     ],

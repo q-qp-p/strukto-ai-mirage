@@ -101,7 +101,7 @@ class RgFlags:
     no_messages: bool
     null_data: bool = False
     engine: str = "default"
-    pcre2_unicode: bool = True
+    unicode: bool = True
 
 
 def prints_context(f: RgFlags) -> bool:

@@ -41,11 +41,11 @@ const FANOUT_COMMANDS: ReadonlySet<string> = new Set([
   Cmd.UNLINK,
   Cmd.TOUCH,
   Cmd.MKDIR,
-  Cmd.TEE,
 ])
 export const RELAY_COMMANDS: ReadonlySet<string> = new Set([
   Cmd.CP,
   Cmd.MV,
+  Cmd.TEE,
   Cmd.DIFF,
   Cmd.CMP,
   Cmd.PASTE,

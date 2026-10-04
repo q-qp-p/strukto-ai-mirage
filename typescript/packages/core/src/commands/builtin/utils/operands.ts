@@ -23,6 +23,7 @@ import {
   isEisdir,
   isFsError,
   isMissError,
+  READ_FAILURES,
 } from '../../../utils/errors.ts'
 import { readFailExitCode } from '../../spec/usage.ts'
 import { resolvePath } from '../../../utils/path.ts'
@@ -249,6 +250,41 @@ export async function splitReadable(
     readable.push(p)
   }
   return [readable, err]
+}
+
+/**
+ * splitReadable for the commands that head each operand. GNU head and tail
+ * open an operand before they read it, and a directory opens: its `==> name
+ * <==` header prints and only the read after it fails. So a directory keeps
+ * its place among the opened operands, named in the unread set, while one
+ * that does not open at all (a missing name) is dropped as splitReadable
+ * drops it. Mirrors Python's split_opened.
+ */
+export async function splitOpened(
+  paths: readonly PathSpec[],
+  stat: Stat,
+  cmdName: string,
+): Promise<[PathSpec[], ReadonlySet<string>, string]> {
+  const opened: PathSpec[] = []
+  const unread = new Set<string>()
+  let err = ''
+  for (const p of paths) {
+    let failure: unknown = null
+    try {
+      if ((await stat(p)).type === FileType.DIRECTORY) failure = eisdir(p)
+    } catch (e) {
+      if (!isFsError(e)) throw e
+      failure = e
+    }
+    if (failure !== null) {
+      err += fsErrorLine(cmdName, p, failure)
+      const code = (failure as { code?: string }).code
+      if (code === undefined || !READ_FAILURES.has(code)) continue
+      unread.add(p.virtual)
+    }
+    opened.push(p)
+  }
+  return [opened, unread, err]
 }
 
 export interface ReadOperand {

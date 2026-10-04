@@ -30,8 +30,6 @@ from mirage.commands.builtin.generic.rg import label_flags
 from mirage.commands.spec import SPECS
 from mirage.commands.spec.flag_view import FlagBag, FlagView
 from mirage.commands.spec.types import FlagValue
-from mirage.io.stream import materialize
-from mirage.io.types import ByteSource
 from mirage.types import PathSpec
 
 
@@ -41,7 +39,6 @@ async def run_fanout(
     text_args: list[str],
     flag_kwargs: dict[str, FlagValue],
     run_single: RunSingle,
-    stdin: ByteSource | None = None,
 ) -> CrossResult:
     """Run a per-operand command whose operands span mounts.
 
@@ -58,12 +55,8 @@ async def run_fanout(
             find expression).
         flag_kwargs (dict): Flags parsed against the shared command spec.
         run_single (RunSingle): Executor-injected single-mount runner.
-        stdin (ByteSource | None): Original stdin, re-fed per operand (tee).
     """
     flags: dict[str, FlagValue] = FlagBag(flag_kwargs)
-    stdin_bytes: bytes | None = None
-    if cmd_name == Cmd.TEE:
-        stdin_bytes = await materialize(stdin) if stdin is not None else b""
     if cmd_name == Cmd.GREP and not FlagView(
         flags, spec=SPECS[Cmd.GREP]
     ).as_bool("h"):
@@ -98,7 +91,6 @@ async def run_fanout(
         scopes,
         list(text_args),
         flags,
-        stdin_bytes=stdin_bytes,
         stop_at_success=quiet,
     )
     errored = [
@@ -110,8 +102,6 @@ async def run_fanout(
 
     if du_c:
         body = du_total(results, du_human)
-    elif cmd_name == Cmd.TEE:
-        body = stdin_bytes or b""
     elif cmd_name in (Cmd.HEAD, Cmd.TAIL) and FlagView(
         flags, spec=SPECS[cmd_name]
     ).as_bool(verbose_key):
