@@ -13,6 +13,7 @@
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import { applyPad } from '../../workspace/executor/builtins/printf/format.ts'
+import { readEscape } from './lexer.ts'
 import { AwkRuntimeError } from './errors.ts'
 import { compileEre, searchFrom, splitPattern } from './regex.ts'
 import {
@@ -32,15 +33,11 @@ const FLOAT_CONVS = 'eEfFgGaA'
 const DIGITS = '0123456789'
 const BLANK_RUN = /[ \t\n]+/
 const UINT64_MASK = (1n << 64n) - 1n
-const MAX_CODE_POINT = 0x10ffff
-const SURROGATE_MIN = 0xd800
-const SURROGATE_MAX = 0xdfff
 const SURROGATE = /[\ud800-\udfff]/
 const RAND_SCALE = 4294967296
-const ESCAPES: Readonly<Record<string, string>> = { t: '\t', n: '\n', '\\': '\\' }
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/
 
-/** The string as code points, which is what awk counts and indexes. */
+/** String units; the interpreter supplies one character per byte. */
 export function chars(subject: string): string[] {
   return SURROGATE.test(subject) ? Array.from(subject) : subject.split('')
 }
@@ -64,7 +61,7 @@ export function substr(subject: string, start: number, length: number | null): s
   return units.slice(begin - 1, begin - 1 + span).join('')
 }
 
-/** 1-based code point position of `needle`, 0 when absent. */
+/** 1-based position of `needle` in the byte view, 0 when absent. */
 export function indexOf(haystack: string, needle: string): number {
   const at = haystack.indexOf(needle)
   if (at === -1) return 0
@@ -242,10 +239,7 @@ function readSpec(fmt: string, start: number): Spec {
  */
 function renderChar(value: Value, convfmt: string): string {
   if (value.kind === ValueKind.NUM) {
-    const code = toIndex(value.num)
-    if (code < 0 || code > MAX_CODE_POINT) return ''
-    if (code >= SURROGATE_MIN && code <= SURROGATE_MAX) return ''
-    return String.fromCodePoint(code)
+    return String.fromCharCode(toIndex(value.num) & 0xff)
   }
   return chars(toStr(value, convfmt))[0] ?? ''
 }
@@ -487,9 +481,9 @@ export function unescape(raw: string): string {
   let idx = 0
   while (idx < raw.length) {
     if (raw.charAt(idx) === '\\' && idx + 1 < raw.length) {
-      const nxt = raw.charAt(idx + 1)
-      out += ESCAPES[nxt] ?? '\\' + nxt
-      idx += 2
+      const [value, after] = readEscape(raw, idx + 1)
+      out += value
+      idx = after
       continue
     }
     out += raw.charAt(idx)

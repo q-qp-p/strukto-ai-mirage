@@ -12,6 +12,7 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import { byteView, textView } from '../../shell/bytes.ts'
 import { AwkSyntaxError } from './errors.ts'
 import { TokKind, tokenize, type Token } from './lexer.ts'
 import {
@@ -83,7 +84,7 @@ export class Parser {
 
   private error(message: string): AwkSyntaxError {
     const tok = this.peek()
-    const near = tok.kind !== TokKind.EOF ? tok.text : 'end of program'
+    const near = tok.kind !== TokKind.EOF ? textView(tok.text) : 'end of program'
     return new AwkSyntaxError(`awk: syntax error at '${near}': ${message}`)
   }
 
@@ -671,5 +672,5 @@ function simpleJump(word: string): Stmt {
 }
 
 export function parse(src: string): Program {
-  return new Parser(tokenize(src)).parseProgram()
+  return new Parser(tokenize(byteView(src))).parseProgram()
 }

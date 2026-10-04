@@ -22,7 +22,7 @@ from mirage.commands.builtin.utils.bre import (
     translate_bre,
     translate_ere,
 )
-from mirage.shell.bytes import byte_char, encode_text
+from mirage.shell.bytes import byte_char, byte_view, encode_text
 from mirage.utils.posix import compile_posix_regex
 
 SED_VERSION = "4.9"
@@ -556,12 +556,13 @@ class _Compiler:
             raise SedError(f"sed: {CONFUSING_BRACKET}", 4, self.wfiles)
         return regex
 
-    def _normalize_text(self, buf: str, regex: bool = False) -> str:
+    def _normalize_text(
+        self, buf: str, regex: bool = False, replacement: bool = False
+    ) -> str:
         """GNU's normalize_text.
 
-        C escapes, ``\\dNNN``, ``\\oNNN`` and ``\\xHH`` bytes (one above
-        ASCII carried as its surrogate escape, written back as that raw
-        byte), ``\\cX`` control characters. In a text buffer (a/i/c and
+        C escapes, ``\\dNNN``, ``\\oNNN`` and ``\\xHH`` bytes in a
+        C-locale byte view, ``\\cX`` control characters. In a text buffer (a/i/c and
         y) a backslash before any other character is dropped; in a regex
         it stays for regcomp, and what an escape produced is read as regex
         syntax, so ``\\x2e`` is any character and ``\\x5c`` a trailing
@@ -570,7 +571,10 @@ class _Compiler:
         Args:
             buf (str): the text as read.
             regex (bool): whether the text is a regex.
+            replacement (bool): preserve replacement syntax and quote numeric
+                escapes that would otherwise become backreferences.
         """
+        buf = byte_view(buf)
         out: list[str] = []
         i = 0
         while i < len(buf):
@@ -602,7 +606,10 @@ class _Compiler:
                     digits += 1
                     i += 1
                     limit *= base
-                out.append(byte_char(value) if digits else nx)
+                char = chr(value & 0xFF) if digits else nx
+                if replacement and digits and char in "\\&":
+                    out.append("\\")
+                out.append(char)
                 continue
             if nx == "c":
                 if i >= len(buf):
@@ -611,14 +618,17 @@ class _Compiler:
                     continue
                 x = buf[i]
                 upper = x.upper() if "a" <= x <= "z" else x
-                out.append(chr(ord(upper) ^ 0x40))
+                char = chr(ord(upper) ^ 0x40)
+                if replacement and char in "\\&":
+                    out.append("\\")
+                out.append(char)
                 i += 1
                 if x == "\\":
                     if buf[i : i + 1] != "\\":
                         raise self._bad(RECURSIVE_ESCAPE_C)
                     i += 1
                 continue
-            out.append("\\" + nx if regex else nx)
+            out.append("\\" + nx if regex or replacement else nx)
         return "".join(out)
 
     def _read_text(self, cmd: SedCommand | None, leadin: str | None) -> None:
@@ -897,7 +907,12 @@ class _Compiler:
             replacement = self._match_slash(slash, False)
             if replacement is None:
                 raise self._bad(UNTERM_S_CMD)
-            sub = SedSubst(re=None, replacement=replacement)
+            sub = SedSubst(
+                re=None,
+                replacement=self._normalize_text(
+                    replacement, replacement=True
+                ),
+            )
             icase, multiline = self._mark_subst_opts(sub)
             sub.re = self._regex(
                 pattern, icase, multiline, _max_reference(replacement)
@@ -929,7 +944,7 @@ class _Compiler:
                 f"sed: {where}: {EXCESS_OPEN_BRACE}", 1, self.wfiles
             )
         if self.pending_text is not None and self.old_text_cmd is not None:
-            self.old_text_cmd.text = self.pending_text or None
+            self.old_text_cmd.text = byte_view(self.pending_text) or None
             self.pending_text = None
         for index, label in self.jumps:
             target = self.labels.get(label)

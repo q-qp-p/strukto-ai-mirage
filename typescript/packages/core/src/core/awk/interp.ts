@@ -12,6 +12,7 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import { encodeText, fromByteView, textView } from '../../shell/bytes.ts'
 import { GetlineKind, RedirKind } from './nodes.ts'
 
 import {
@@ -116,8 +117,6 @@ const PROGRAM_NAME = 'awk'
 const MAX_CALL_DEPTH = 100
 
 const PLAIN_PRINT: Print = { type: 'Print', args: [], redirect: null }
-
-const ENC = new TextEncoder()
 
 class NextRecord extends Error {}
 
@@ -343,7 +342,7 @@ export class Interpreter {
           record = await this.main.next()
         } catch (err) {
           if (!(err instanceof AwkIOError)) throw err
-          throw new AwkRuntimeError(`awk: cannot open "${this.mainName}" (${err.detail})`)
+          throw new AwkRuntimeError(`awk: cannot open "${textView(this.mainName)}" (${err.detail})`)
         }
         if (record !== null) {
           this.nr += 1
@@ -683,8 +682,10 @@ export class Interpreter {
       const span = args.length > 2 ? await this.numArg(args, 2) : null
       return text(substr(subject, start, span))
     }
-    if (name === 'toupper') return text((await this.strArg(args, 0)).toUpperCase())
-    if (name === 'tolower') return text((await this.strArg(args, 0)).toLowerCase())
+    if (name === 'toupper')
+      return text((await this.strArg(args, 0)).replace(/[a-z]/g, (ch) => ch.toUpperCase()))
+    if (name === 'tolower')
+      return text((await this.strArg(args, 0)).replace(/[A-Z]/g, (ch) => ch.toLowerCase()))
     if (name === 'sprintf') {
       const fmt = await this.strArg(args, 0)
       const rest: Value[] = []
@@ -800,8 +801,8 @@ export class Interpreter {
    * once held, later text waits behind it.
    */
   private stdout(body: string): void {
-    if (this.outPipes.size > 0 || this.held.length > 0) this.held.push(ENC.encode(body))
-    else this.out.push(ENC.encode(body))
+    if (this.outPipes.size > 0 || this.held.length > 0) this.held.push(fromByteView(body))
+    else this.out.push(fromByteView(body))
   }
 
   /** Let held standard output go, as a flush of stdout does. */
@@ -816,7 +817,7 @@ export class Interpreter {
       await this.host.writeFile(name, body, append)
     } catch (err) {
       if (!(err instanceof AwkIOError)) throw err
-      throw new AwkRuntimeError(`awk: cannot open "${name}" for output (${err.detail})`)
+      throw new AwkRuntimeError(`awk: cannot open "${textView(name)}" for output (${err.detail})`)
     }
   }
 
@@ -870,7 +871,7 @@ export class Interpreter {
       return
     }
     if (name === STDERR_NAME) {
-      this.err.push(ENC.encode(body))
+      this.err.push(fromByteView(body))
       return
     }
     let pending = this.outFiles.get(name)
@@ -887,7 +888,7 @@ export class Interpreter {
     const body = (this.outPipes.get(command) ?? []).join('')
     this.outPipes.delete(command)
     await this.flushFiles()
-    const run = await this.host.run(command, ENC.encode(body))
+    const run = await this.host.run(command, fromByteView(body))
     this.out.push(run.stdout)
     this.err.push(run.stderr)
     return run.status
@@ -1172,12 +1173,12 @@ export class Interpreter {
    * file that could not be written now.
    */
   async salvage(failure: Error): Promise<[Uint8Array, Uint8Array]> {
-    this.err.push(ENC.encode(`${failure.message}\n`))
+    this.err.push(encodeText(`${failure.message}\n`))
     try {
       await this.flushFiles()
     } catch (err) {
       if (!(err instanceof AwkRuntimeError)) throw err
-      this.err.push(ENC.encode(`${err.message}\n`))
+      this.err.push(encodeText(`${err.message}\n`))
     }
     this.release()
     return this.take()

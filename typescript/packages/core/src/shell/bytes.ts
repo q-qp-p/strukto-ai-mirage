@@ -167,3 +167,28 @@ export function decodeText(raw: Uint8Array): string {
   if (used > 0) parts.push(String.fromCharCode(...units.subarray(0, used)))
   return parts.join('')
 }
+
+/** One character per byte for C-locale patterns, inputs and string operations. */
+export function byteView(value: string | Uint8Array): string {
+  const bytes = typeof value === 'string' ? encodeText(value) : value
+  const parts: string[] = []
+  for (let at = 0; at < bytes.length; at += 8192)
+    parts.push(String.fromCharCode(...bytes.subarray(at, at + 8192)))
+  return parts.join('')
+}
+
+/** Recover bytes, including invalid UTF-8 and matches splitting a character. */
+export function fromByteView(view: string): Uint8Array {
+  const out = new Uint8Array(view.length)
+  for (let at = 0; at < view.length; at++) {
+    const byte = view.charCodeAt(at)
+    if (byte > 255) throw new RangeError('byte view contains a non-byte character')
+    out[at] = byte
+  }
+  return out
+}
+
+/** Return byte-view paths and shell programs to workspace text. */
+export function textView(view: string): string {
+  return decodeText(fromByteView(view))
+}

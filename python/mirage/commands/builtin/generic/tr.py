@@ -9,6 +9,7 @@ from mirage.commands.spec.flag_view import FlagView
 from mirage.commands.spec.types import CommandName, FlagValue
 from mirage.commands.spec.usage import extra_operand_error, usage_hint
 from mirage.io.types import ByteSource, IOResult
+from mirage.shell.bytes import byte_view, from_byte_view
 from mirage.types import PathSpec
 from mirage.utils.posix import class_characters
 
@@ -64,7 +65,7 @@ async def _tr_stream(
         set(set2) if squeeze and set2 else set(set1) if squeeze else set()
     )
     async for chunk in source:
-        text = chunk.decode(errors="replace")
+        text = byte_view(chunk)
         if delete:
             result = "".join(c for c in text if c not in set1)
         elif table is not None:
@@ -81,7 +82,7 @@ async def _tr_stream(
             result = "".join(squeezed)
         elif result:
             prev_char = result[-1]
-        yield result.encode()
+        yield from_byte_view(result)
 
 
 async def tr(
@@ -106,12 +107,14 @@ async def tr(
                 "squeezing repeats." + _TRY_HELP
             )
         raise extra_operand_error(CommandName.TR, texts[max_operands])
-    set1 = _expand_ranges(interpret_escapes(texts[0]))
+    set1 = _expand_ranges(interpret_escapes(byte_view(texts[0])))
     if parsed.complement:
-        all_chars = "".join(chr(i) for i in range(128))
+        all_chars = "".join(chr(i) for i in range(256))
         set1 = "".join(ch for ch in all_chars if ch not in set1)
     set2 = (
-        _expand_ranges(interpret_escapes(texts[1])) if len(texts) >= 2 else ""
+        _expand_ranges(interpret_escapes(byte_view(texts[1])))
+        if len(texts) >= 2
+        else ""
     )
 
     if set2 and parsed.truncate_set1:

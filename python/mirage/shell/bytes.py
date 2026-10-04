@@ -64,3 +64,33 @@ def decode_text(data: bytes) -> str:
         data (bytes): the bytes to read as text.
     """
     return data.decode("utf-8", "surrogateescape")
+
+
+def byte_view(value: str | bytes) -> str:
+    """Represent each byte as one character for C-locale text commands.
+
+    Args:
+        value (str | bytes): shell text (including escaped bytes), or input
+            bytes. Literal UTF-8 and byte escapes acquire the same view.
+    """
+    return (encode_text(value) if isinstance(value, str) else value).decode(
+        "latin-1"
+    )
+
+
+def from_byte_view(view: str) -> bytes:
+    """Recover bytes without replacing invalid UTF-8 or partial characters.
+
+    Args:
+        view (str): text whose characters each represent one byte.
+    """
+    return view.encode("latin-1")
+
+
+def text_view(view: str) -> str:
+    """Return byte-view paths and shell programs to workspace text.
+
+    Args:
+        view (str): byte-oriented text crossing back into the workspace.
+    """
+    return decode_text(from_byte_view(view))

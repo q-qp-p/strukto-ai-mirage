@@ -12,7 +12,7 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
-import { byteChar, encodeText } from '../../shell/bytes.ts'
+import { byteChar, byteView, encodeText } from '../../shell/bytes.ts'
 import { compilePosixRegex } from '../../utils/posix.ts'
 import { BreError, PosixSyntax, translateBre, translateEre } from './utils/bre.ts'
 
@@ -471,7 +471,8 @@ class Compiler {
   // backslash before any other character is dropped; in a regex it stays
   // for regcomp, and what an escape produced is read as regex syntax, so
   // `\x2e` is any character and `\x5c` a trailing backslash.
-  private normalizeText(buf: string, regex = false): string {
+  private normalizeText(buf: string, regex = false, replacement = false): string {
+    buf = byteView(buf)
     let out = ''
     let i = 0
     while (i < buf.length) {
@@ -499,7 +500,9 @@ class Compiler {
           digits += 1
           i += 1
         }
-        out += digits === 0 ? nx : byteChar(value)
+        const char = digits === 0 ? nx : String.fromCharCode(value & 0xff)
+        if (replacement && digits !== 0 && (char === '\\' || char === '&')) out += '\\'
+        out += char
         continue
       }
       if (nx === 'c') {
@@ -509,7 +512,9 @@ class Compiler {
         }
         const x = buf.charAt(i)
         const upper = x >= 'a' && x <= 'z' ? x.toUpperCase() : x
-        out += String.fromCharCode(upper.charCodeAt(0) ^ 0x40)
+        const char = String.fromCharCode(upper.charCodeAt(0) ^ 0x40)
+        if (replacement && (char === '\\' || char === '&')) out += '\\'
+        out += char
         i += 1
         if (x === '\\') {
           if (buf.charAt(i) !== '\\') this.bad(RECURSIVE_ESCAPE_C)
@@ -517,7 +522,7 @@ class Compiler {
         }
         continue
       }
-      out += regex ? '\\' + nx : nx
+      out += regex || replacement ? '\\' + nx : nx
     }
     return out
   }
@@ -800,7 +805,7 @@ class Compiler {
         if (replacement === null) this.bad(UNTERM_S_CMD)
         const sub: SedSubst = {
           re: null,
-          replacement,
+          replacement: this.normalizeText(replacement, false, true),
           global: false,
           print: false,
           numb: 0,
@@ -843,7 +848,7 @@ class Compiler {
       throw new SedError(`sed: ${open.where}: ${EXCESS_OPEN_BRACE}`, 1, [...this.wfiles])
     }
     if (this.pendingText !== null && this.oldTextCmd !== null) {
-      this.oldTextCmd.text = this.pendingText === '' ? null : this.pendingText
+      this.oldTextCmd.text = this.pendingText === '' ? null : byteView(this.pendingText)
       this.pendingText = null
     }
     for (const [index, label] of this.jumps) {

@@ -12,6 +12,7 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import { byteView, textView } from '../../../shell/bytes.ts'
 import { compilePosixRegex } from '../../../utils/posix.ts'
 import { specOf } from '../../spec/builtins.ts'
 import { FlagView } from '../../spec/flag_view.ts'
@@ -33,15 +34,14 @@ import { linkDoor } from '../utils/links.ts'
 import { operandLabel } from '../utils/stream.ts'
 import type { StatFn } from './archive/walk.ts'
 import { decompressInputs } from './decompress.ts'
-import { lineOffsets, matchOffset, prefixOf } from '../grep_offsets.ts'
-import { decodeText } from '../../../shell/bytes.ts'
+import { lineOffsets, prefixOf } from '../grep_offsets.ts'
 import { formatRecords } from '../utils/output.ts'
 import { splitLines } from '../utils/lines.ts'
 
 const ENC = new TextEncoder()
 
 function anyLineSelected(data: Uint8Array, pattern: RegExp, invert: boolean): boolean {
-  for (const line of splitLines(decodeText(data))) {
+  for (const line of splitLines(byteView(data))) {
     let hit = pattern.test(line)
     if (invert) hit = !hit
     if (hit) return true
@@ -66,8 +66,8 @@ function zgrepSearch(
   opts: ZgrepOpts,
   filename: string | null,
 ): [string[], boolean] {
-  const lines = splitLines(decodeText(data))
-  const offsets = opts.byteOffsets ? lineOffsets(lines) : []
+  const lines = splitLines(byteView(data))
+  const offsets = opts.byteOffsets ? lineOffsets(lines.map(textView)) : []
   const reGlobal = opts.onlyMatching
     ? compilePosixRegex(
         pattern.source,
@@ -88,7 +88,7 @@ function zgrepSearch(
       }
       if (hits.length > 0) {
         for (const h of hits) {
-          matched.push([i + 1, matchOffset(start, line, matchStart(h)), matchText(h)])
+          matched.push([i + 1, start + matchStart(h), matchText(h)])
           if (opts.maxCount !== null && matched.length >= opts.maxCount) break
         }
       }
@@ -109,7 +109,7 @@ function zgrepSearch(
     let prefix = ''
     if (filename !== null) prefix = filename + ':'
     prefix += prefixOf(opts.lineNumbers ? idx : null, opts.byteOffsets ? offset : null)
-    result.push(prefix + line)
+    result.push(prefix + textView(line))
   }
   return [result, matched.length > 0]
 }
@@ -179,7 +179,7 @@ export async function zgrepGeneric(
       ? null
       : neverMatch
         ? new RegExp(NEVER_MATCH)
-        : compilePattern(rawPattern, ignoreCase, fixedString, wholeWord, syntax)
+        : compilePattern(byteView(rawPattern), ignoreCase, fixedString, wholeWord, syntax)
 
   const multi = paths.length > 1
   const showFilename = forceH || (multi && !hideH)
