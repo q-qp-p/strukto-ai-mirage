@@ -18,30 +18,30 @@ topic or backend:
 Each folder's README lists what its files cover and where a runtime
 differs.
 
-| Folder                                 | Kind    | Covers                                                                                     |
-| -------------------------------------- | ------- | ------------------------------------------------------------------------------------------ |
-| [`open/`](open/)                       | topic   | open modes `r`, `r+`, `w`, `a`, `x`, malformed modes, paths outside the view               |
-| [`read/`](read/)                       | topic   | whole-file and line reads, seek and ranged reads                                           |
-| [`write/`](write/)                     | topic   | writes through each API, read-only and root mounts                                         |
-| [`dir/`](dir/)                         | topic   | listing, `mkdir`, `rmdir`, glob and walk                                                   |
-| [`path/`](path/)                       | topic   | stat, rename, unlink, symlinks, hard links, times and modes, xattrs, the working directory |
-| [`program/`](program/)                 | topic   | what one program gets: argv, output streams, eval                                          |
-| [`sandbox/`](sandbox/)                 | topic   | the whole-line door every sandbox shares                                                   |
-| [`routing/`](routing/)                 | topic   | how a line reaches a runtime                                                               |
-| [`policy/`](policy/)                   | topic   | route policy, hooks and output limits                                                      |
-| [`config/`](config/)                   | topic   | runtime names and config fields that are refused                                           |
-| [`cli/`](cli/)                         | topic   | script CLIs in Python and JavaScript                                                       |
-| [`backend/`](backend/)                 | topic   | guest reads and writes on real redis, S3 and MongoDB                                       |
-| [`facade/`](facade/)                   | topic   | the SDK op facade                                                                          |
-| [`monty/`](monty/)                     | runtime | Monty's invocation, argv, streams, policy and Python surface                               |
-| [`wasi/`](wasi/)                       | runtime | CPython on WASI: import paths                                                              |
-| [`pyodide/`](pyodide/)                 | runtime | Pyodide's mounts, streams, environment, tracebacks and flags                               |
-| [`quickjs/`](quickjs/)                 | runtime | QuickJS invocation, printing, argv and policy scripts                                      |
-| [`local/`](local/)                     | runtime | the host's own interpreter                                                                 |
-| [`workspace/`](workspace/)             | runtime | the in-mirage runtime: captures, lockdown, listings                                        |
-| [`sandlock/`](sandlock/)               | runtime | Landlock limits on a host process                                                          |
-| [`apple_container/`](apple_container/) | runtime | Apple's container: stderr, sessions, an unserved cwd                                       |
-| [`e2b/`](e2b/)                         | scripts | manual checks against a live E2B sandbox, not run by the runners                           |
+| Folder                                 | Kind    | Covers                                                                                            |
+| -------------------------------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| [`open/`](open/)                       | topic   | open modes `r`, `r+`, `w`, `w+`, `a`, `a+`, `x`, malformed modes, paths outside the view          |
+| [`read/`](read/)                       | topic   | whole-file and line reads, seek and ranged reads                                                  |
+| [`write/`](write/)                     | topic   | writes through each API, `pwrite`, `truncate`, files left open at exit, read-only and root mounts |
+| [`dir/`](dir/)                         | topic   | listing, `mkdir`, `rmdir`, glob and walk                                                          |
+| [`path/`](path/)                       | topic   | stat, rename, unlink, symlinks, hard links, times and modes, xattrs, the working directory        |
+| [`program/`](program/)                 | topic   | what one program gets: argv, output streams, eval                                                 |
+| [`sandbox/`](sandbox/)                 | topic   | the whole-line door every sandbox shares                                                          |
+| [`routing/`](routing/)                 | topic   | how a line reaches a runtime                                                                      |
+| [`policy/`](policy/)                   | topic   | route policy, hooks and output limits                                                             |
+| [`config/`](config/)                   | topic   | runtime names and config fields that are refused                                                  |
+| [`cli/`](cli/)                         | topic   | script CLIs in Python and JavaScript                                                              |
+| [`backend/`](backend/)                 | topic   | guest reads and writes on real redis, S3 and MongoDB                                              |
+| [`facade/`](facade/)                   | topic   | the SDK op facade                                                                                 |
+| [`monty/`](monty/)                     | runtime | Monty's invocation, argv, streams, policy and Python surface                                      |
+| [`wasi/`](wasi/)                       | runtime | CPython on WASI: import paths                                                                     |
+| [`pyodide/`](pyodide/)                 | runtime | Pyodide's mounts, streams, environment, tracebacks and flags                                      |
+| [`quickjs/`](quickjs/)                 | runtime | QuickJS invocation, printing, argv and policy scripts                                             |
+| [`local/`](local/)                     | runtime | the host's own interpreter                                                                        |
+| [`workspace/`](workspace/)             | runtime | the in-mirage runtime: captures, lockdown, listings                                               |
+| [`sandlock/`](sandlock/)               | runtime | Landlock limits on a host process                                                                 |
+| [`apple_container/`](apple_container/) | runtime | Apple's container: stderr, sessions, an unserved cwd                                              |
+| [`e2b/`](e2b/)                         | scripts | manual checks against a live E2B sandbox, not run by the runners                                  |
 
 ## Runtimes
 

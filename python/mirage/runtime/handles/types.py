@@ -12,20 +12,27 @@
 # limitations under the License.
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
-from mirage.runtime.handles.chunked import ChunkedHandle
-from mirage.runtime.handles.file_handle import FileHandle, write_runs
-from mirage.runtime.handles.file_table import FileTable
-from mirage.runtime.handles.flush import plan_flush
-from mirage.runtime.handles.mode import parse_mode
-from mirage.runtime.handles.types import FlushKind, FlushStep
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Literal
 
-__all__ = [
-    "ChunkedHandle",
-    "FileHandle",
-    "FileTable",
-    "FlushKind",
-    "FlushStep",
-    "parse_mode",
-    "plan_flush",
-    "write_runs",
-]
+FlushKind = Literal["write", "append", "pwrite", "truncate"]
+
+FileFetch = Callable[[int, int | None], bytes]
+
+
+@dataclass(frozen=True, slots=True)
+class FlushStep:
+    """One op a closing handle owes the mount.
+
+    Args:
+        kind (FlushKind): the op to dispatch.
+        data (bytes): the payload of a write, append or pwrite.
+        offset (int): where a pwrite lands.
+        length (int): the length a truncate leaves.
+    """
+
+    kind: FlushKind
+    data: bytes = b""
+    offset: int = 0
+    length: int = 0

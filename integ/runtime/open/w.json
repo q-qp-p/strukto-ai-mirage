@@ -144,13 +144,6 @@
             "ops_absent": [
               "create /data/seed.txt"
             ]
-          },
-          "expect_on": {
-            "pyodide": {
-              "ops_contain": [
-                "write /data/seed.txt"
-              ]
-            }
           }
         },
         {
