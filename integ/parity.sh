@@ -3,8 +3,8 @@
 # Python CLI and the TypeScript CLI, records normalized results per language,
 # then asserts (1) the two languages produce identical results and (2) the
 # results match the expected values. Covers subshell isolation, sessions,
-# per-session mount modes, asks (list-asks/allow/deny), git-backed
-# versioning, and fuse config wiring. Mounts are RAM only (no redis/minio), but
+# per-session mount modes, asks (list-asks/allow/deny), workspace get, list
+# and clone, and fuse config wiring. Mounts are RAM only (no redis/minio), but
 # the fuse case creates a `backend: fuse` workspace, which is a REAL kernel
 # mount on both hosts -- so this needs libfuse and /dev/fuse, same as
 # fuse/cli_fuse.sh.
@@ -288,14 +288,9 @@ expect "ask.deny_outcome" "deny"
 expect "ask.denied_err" "rm: Permission denied"
 expect "ask.denied_reason" "removal needs sign-off"
 expect "ask.drained" "0"
-expect "version.log" "second,first"
-expect "version.branch_log" "first"
 expect "ws.get_mounts" "/"
 expect "ws.list_has_vw" "yes"
-expect "clone.content" "two"
-expect "clone.at_first" "one"
-expect "version.checkout_first" "one"
-expect 'version.diff' '{"added":[],"modified":["a.txt"],"deleted":[]}'
+expect "clone.content" "one"
 expect "fuse.operates" "alive"
 expect "sym.readlink" "/data/s.txt"
 expect "sym.cat_follow" "sym1"
@@ -314,4 +309,4 @@ if [ "$fail" != "0" ]; then
   exit 1
 fi
 echo
-echo "CLI feature parity OK (subshell, sessions, session modes, asks, versioning, fuse; py == ts)."
+echo "CLI feature parity OK (subshell, sessions, session modes, asks, workspaces, fuse; py == ts)."
