@@ -13,6 +13,7 @@
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import io
+import os
 from collections.abc import Iterator
 
 import boto3
@@ -70,6 +71,18 @@ async def test_the_size_counts_only_the_tar(tmp_path):
     assert size == len(buffer.getvalue()) - len(b"head")
     path = tmp_path / "w.tar"
     assert await ws.snapshot(path) == path.stat().st_size
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compress", [None, "gz"])
+async def test_a_snapshot_streams_to_a_pipe(compress):
+    read, write = os.pipe()
+    with os.fdopen(write, "wb") as out:
+        size = await (await _written()).snapshot(out, compress=compress)
+    with os.fdopen(read, "rb") as source:
+        data = source.read()
+    assert size == len(data) > 0
+    assert await _cat(await Workspace.load(io.BytesIO(data))) == "kept\n"
 
 
 @pytest.mark.asyncio

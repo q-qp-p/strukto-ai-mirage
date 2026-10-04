@@ -47,6 +47,45 @@ def _key_path(key: str) -> PathSpec:
     return PathSpec.from_str_path("/" + key.lstrip("/"))
 
 
+class _Counted:
+    """A writable file-like target that counts what is written to it.
+
+    Its ``tell`` is the count, so tarfile can write to a target that
+    cannot tell, such as a pipe.
+    """
+
+    def __init__(self, target: Any) -> None:
+        """Wrap a target.
+
+        Args:
+            target (Any): a writable file-like object.
+        """
+        self._target = target
+        self.size = 0
+
+    def write(self, data: bytes) -> int:
+        """Write to the target and count the bytes.
+
+        Args:
+            data (bytes): the bytes.
+
+        Returns:
+            int: how many were written.
+        """
+        self._target.write(data)
+        written = memoryview(data).nbytes
+        self.size += written
+        return written
+
+    def tell(self) -> int:
+        """Bytes written so far.
+
+        Returns:
+            int: the count.
+        """
+        return self.size
+
+
 async def snapshot(
     ws: "Workspace",
     target,
@@ -68,8 +107,7 @@ async def snapshot(
     Args:
         ws: the workspace to snapshot.
         target: filesystem path (str/Path) OR a writable file-like
-            object with ``tell`` (BytesIO, etc.); with ``s3``, the
-            object key.
+            object (BytesIO, a pipe, etc.); with ``s3``, the object key.
         compress: None | "gz" | "bz2" | "xz".
         s3 (S3Config | None): an S3-like store to put the tar in, under
             its ``key_prefix``.
@@ -85,11 +123,11 @@ async def snapshot(
         )
         return (await run_blocking(Path(target).stat)).st_size
     if s3 is None:
-        start = target.tell()
+        counted = _Counted(target)
         await run_blocking(
-            write_tar, target, manifest, blobs, compress=compress
+            write_tar, counted, manifest, blobs, compress=compress
         )
-        return target.tell() - start
+        return counted.size
     buffer = io.BytesIO()
     await run_blocking(write_tar, buffer, manifest, blobs, compress=compress)
     accessor = _s3_accessor(s3)

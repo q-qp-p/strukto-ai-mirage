@@ -118,7 +118,8 @@
   },
   "workspace/snapshot/api": {
    "python_only": {
-    "_s3_accessor": "Python's S3 client is the optional 's3' extra, so its accessor is built behind the install hint; TypeScript's S3 SDK is a core dependency."
+    "_s3_accessor": "Python's S3 client is the optional 's3' extra, so its accessor is built behind the install hint; TypeScript's S3 SDK is a core dependency.",
+    "_Counted": "Python streams the tar into the caller's file-like target through tarfile, which needs tell(), and counts the bytes as they pass; TypeScript builds the tar in memory and takes its length."
    }
   },
   "commands/builtin/generic/tar/tar": {
