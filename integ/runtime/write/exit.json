@@ -7,6 +7,13 @@
         "pyodide",
         "quickjs"
       ],
+      "backends": [
+        "ram",
+        "disk",
+        "ssh",
+        "s3",
+        "redis"
+      ],
       "world": {
         "mounts": {
           "/data": {

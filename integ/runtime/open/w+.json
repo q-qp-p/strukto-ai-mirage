@@ -9,6 +9,8 @@
       ],
       "backends": [
         "ram",
+        "disk",
+        "ssh",
         "s3",
         "redis"
       ],

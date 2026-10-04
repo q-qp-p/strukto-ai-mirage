@@ -77,8 +77,9 @@ the typescript runners leave e2b out of their runtime tables.
 - `expect` is the shared answer, CPython's on Linux. `expect_on` overrides
   it by `runtime`, `runtime@host`, `backend` or `runtime@backend`. Every
   override is a recorded difference, named in the folder's README.
-- `backends` repeats a case over `ram`, `s3` and `redis`; each mount gets
-  its own key space.
+- `backends` repeats a case over `ram`, `disk`, `ssh`, `s3` and `redis`;
+  each mount gets its own key space or directory. `ssh` mounts a fresh
+  directory on the ssh runtime's box over SFTP.
 - A runtime the hosted runners cannot give every job (e2b, smolvm,
   apple_container, sandlock) is skipped when its requirement is unmet, even
   under `INTEG_RUNTIME_STRICT=1`.
@@ -111,7 +112,7 @@ bash integ/runtime/cli.sh python/.venv/bin/mirage "node typescript/packages/cli/
 | `REDIS_URL`                                  | `redis` variants and `backend/redis.json`           |
 | `MONGODB_URI`                                | `backend/mongodb.json`                              |
 | `MIRAGE_INTEG_DOCKER_CONTAINER`              | docker                                              |
-| `MIRAGE_INTEG_SSH_HOST`, `_USERNAME`, `_KEY` | ssh                                                 |
+| `MIRAGE_INTEG_SSH_HOST`, `_USERNAME`, `_KEY` | ssh, and the `ssh` variants                         |
 | `MIRAGE_INTEG_E2B_SANDBOX`                   | e2b                                                 |
 | `MIRAGE_INTEG_SMOLVM_MACHINE`                | smolvm                                              |
 | `MIRAGE_INTEG_APPLE_CONTAINER`               | apple_container                                     |

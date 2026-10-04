@@ -1,7 +1,7 @@
 # write
 
 Writes that reach a mount. Runs on monty and quickjs on both hosts, wasi on the python host and pyodide on the typescript host. A case with a `backends` list also
-runs over RAM, S3 and redis.
+runs over RAM, disk, ssh, S3 and redis.
 
 | File            | Pins                                                                                                                        | Differs                                                                                                                                                                                                                                                                       |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
