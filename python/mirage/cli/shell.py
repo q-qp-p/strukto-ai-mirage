@@ -13,7 +13,9 @@
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import json
+import signal
 import sys
+from types import FrameType
 from typing import IO, Any
 from urllib.parse import quote
 
@@ -71,9 +73,9 @@ def shell_cmd(
     streams the input to the line as it reads it, so the line starts
     before the input ends; Ctrl-C drops the request, which cancels the
     job, and exits 130. Without piped stdin it is submitted, then
-    waited on, and Ctrl-C cancels it through ``DELETE /v1/jobs/{id}``.
-    ``--background`` returns the job id at once instead, after any
-    piped stdin has been sent.
+    waited on, and Ctrl-C, from the submit on, cancels it through
+    ``DELETE /v1/jobs/{id}``. ``--background`` returns the job id at
+    once instead, after any piped stdin has been sent.
     """
     payload: dict[str, Any] = {"command": command}
     if session_id:
@@ -98,17 +100,28 @@ def shell_cmd(
             result = handle_response(r)
             emit(result)
             raise typer.Exit(code=exit_code_from_response(result))
-        if piped:
-            r = client.request(
-                "POST",
-                path,
-                params={"background": "true"},
-                files=_upload(payload),
-            )
-        else:
-            r = client.request(
-                "POST", path, params={"background": "true"}, json=payload
-            )
+        interrupted = False
+
+        def interrupt(signum: int, frame: FrameType | None) -> None:
+            nonlocal interrupted
+            interrupted = True
+
+        held = None if background else signal.signal(signal.SIGINT, interrupt)
+        try:
+            if piped:
+                r = client.request(
+                    "POST",
+                    path,
+                    params={"background": "true"},
+                    files=_upload(payload),
+                )
+            else:
+                r = client.request(
+                    "POST", path, params={"background": "true"}, json=payload
+                )
+        finally:
+            if held is not None:
+                signal.signal(signal.SIGINT, held)
         submitted = handle_response(r)
         if not isinstance(submitted, dict):
             fail(f"unexpected daemon response: {submitted!r}")
@@ -116,12 +129,15 @@ def shell_cmd(
             emit(submitted)
             return
         job_id = quote(str(submitted["job_id"]), safe="")
-        try:
-            job = wait_job(client, job_id)
-        except KeyboardInterrupt:
+        if not interrupted:
+            try:
+                job = wait_job(client, job_id)
+            except KeyboardInterrupt:
+                interrupted = True
+        if interrupted:
             client.request("DELETE", f"/v1/jobs/{job_id}")
             wait_job(client, job_id)
-            raise typer.Exit(code=INTERRUPTED) from None
+            raise typer.Exit(code=INTERRUPTED)
     if job["status"] == JobStatus.FAILED:
         fail(f"shell failed: {job['error']}", exit_code=2)
     if job["status"] == JobStatus.CANCELED:

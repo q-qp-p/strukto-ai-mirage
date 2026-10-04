@@ -58,8 +58,8 @@ A failed request answers `{"detail": "<message>"}`.
 | `400` | The body is not JSON or fails its schema, or the `Host` is not allowed. |
 | `401` | A missing or rejected token. |
 | `404` | An unknown workspace, session, job or ask. |
-| `409` | A taken id, an ask already answered, or a branch that moved. |
-| `413` | A body over 4 MiB. |
+| `409` | A taken id, or an ask already answered. |
+| `413` | A body over 4 MiB, or an uploaded snapshot over 1 GiB. |
 | `422` | An unknown profile or a bad mode. |
 | `499` | The job was canceled. |
 | `500` | The job failed inside the server. |
@@ -132,7 +132,7 @@ Answers the tar (`application/x-tar`). Secrets are stored redacted. The server n
 
 <Badge color="green">POST</Badge> `/v1/workspaces/load`
 
-Upload the tar as `multipart/form-data`: a `request` part holding the JSON fields below, then a `snapshot` part. Or send JSON with a `key` to load from the snapshot store.
+Upload the tar as `multipart/form-data`: a `request` part holding the JSON fields below, then a `snapshot` part of up to 1 GiB. Or send JSON with a `key` to load from the snapshot store.
 
 <ParamField body="key" type="string">The tar's key in the snapshot store; leave it out when uploading.</ParamField>
 <ParamField body="id" type="string">The new workspace's id.</ParamField>

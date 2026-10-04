@@ -239,7 +239,7 @@ class RpcDoor:
                 )
 
         answers: list[asyncio.Task[RpcResponse | None] | RpcResponse] = []
-        keys: list[str] = []
+        held: list[tuple[str, asyncio.Task[RpcResponse | None]]] = []
         for message in messages:
             if not isinstance(message, dict):
                 answers.append(
@@ -261,7 +261,7 @@ class RpcDoor:
             if "id" in message:
                 key = InFlight.key(workspace_id, session_id, message["id"])
                 self.inflight.add(key, task.cancel)
-                keys.append(key)
+                held.append((key, task))
             answers.append(task)
         tasks = [a for a in answers if isinstance(a, asyncio.Task)]
 
@@ -277,8 +277,8 @@ class RpcDoor:
                 await asyncio.wait(tasks)
         finally:
             watcher.cancel()
-            for key in keys:
-                self.inflight.discard(key)
+            for key, task in held:
+                self.inflight.discard(key, task.cancel)
         responses = [
             response
             for response in (

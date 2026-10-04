@@ -271,6 +271,31 @@ describe('cancelling an MCP shell call', () => {
     expect(await jobStatus(base, id, 'sleep 20')).toBe('canceled')
   })
 
+  it('refuses a body over the limit', async () => {
+    const { base, app } = await daemon()
+    const id = await createWorkspace(base)
+    const refused = await app.inject({
+      method: 'POST',
+      url: `/v1/workspaces/${id}/mcp`,
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      payload: ' '.repeat(4 * 1024 * 1024 + 1),
+    })
+    expect(refused.statusCode).toBe(413)
+  })
+
+  it('cancels a job whose call was cancelled while it was submitted', async () => {
+    const { base, app } = await daemon()
+    const id = await createWorkspace(base)
+    const operations = await app.mcp.tools(id)
+    if (typeof operations === 'string') throw new Error(operations)
+    const result = await operations.shell('sleep 20', AbortSignal.abort())
+    expect(result.isError).toBe(true)
+    expect(await jobStatus(base, id, 'sleep 20')).toBe('canceled')
+  })
+
   it('lets go of a call once its answer is read', async () => {
     const { base, app } = await daemon()
     const id = await createWorkspace(base)
@@ -291,6 +316,6 @@ describe('cancelling an MCP shell call', () => {
     })
     expect(await response.text()).toContain('hi')
     expect(added).toHaveBeenCalledTimes(1)
-    expect(discarded).toHaveBeenCalledWith(added.mock.calls[0]?.[0])
+    expect(discarded).toHaveBeenCalledWith(...(added.mock.calls[0] ?? []))
   })
 })

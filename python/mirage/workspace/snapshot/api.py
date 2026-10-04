@@ -68,7 +68,8 @@ async def snapshot(
     Args:
         ws: the workspace to snapshot.
         target: filesystem path (str/Path) OR a writable file-like
-            object (BytesIO, etc.); with ``s3``, the object key.
+            object with ``tell`` (BytesIO, etc.); with ``s3``, the
+            object key.
         compress: None | "gz" | "bz2" | "xz".
         s3 (S3Config | None): an S3-like store to put the tar in, under
             its ``key_prefix``.
@@ -78,20 +79,25 @@ async def snapshot(
     """
     state = await to_state_dict(ws)
     manifest, blobs = split_manifest_and_blobs(state)
+    if s3 is None and not hasattr(target, "write"):
+        await run_blocking(
+            write_tar, target, manifest, blobs, compress=compress
+        )
+        return (await run_blocking(Path(target).stat)).st_size
+    if s3 is None:
+        start = target.tell()
+        await run_blocking(
+            write_tar, target, manifest, blobs, compress=compress
+        )
+        return target.tell() - start
     buffer = io.BytesIO()
     await run_blocking(write_tar, buffer, manifest, blobs, compress=compress)
-    data = buffer.getvalue()
-    if s3 is not None:
-        accessor = _s3_accessor(s3)
-        try:
-            await write_bytes(accessor, _key_path(target), data)
-        finally:
-            await accessor.close()
-    elif hasattr(target, "write"):
-        await run_blocking(target.write, data)
-    else:
-        await run_blocking(Path(target).write_bytes, data)
-    return len(data)
+    accessor = _s3_accessor(s3)
+    try:
+        await write_bytes(accessor, _key_path(target), buffer.getvalue())
+    finally:
+        await accessor.close()
+    return buffer.tell()
 
 
 async def read_snapshot(

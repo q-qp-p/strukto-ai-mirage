@@ -64,6 +64,7 @@ export class DaemonToolOperations extends MirageToolOperations {
     const jobId = job.id
     const cancel = (): void => void this.jobs.cancel(jobId)
     signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted === true) cancel()
     try {
       job = await this.jobs.wait(jobId)
     } finally {
@@ -123,12 +124,12 @@ export class McpDoor {
     }
     if (calls.length === 0) return handler.fetch(request, options)
     const stop = new AbortController()
-    for (const call of calls)
-      this.inflight.add(call, () => {
-        stop.abort()
-      })
+    const abort = (): void => {
+      stop.abort()
+    }
+    for (const call of calls) this.inflight.add(call, abort)
     const settle = (): void => {
-      for (const call of calls) this.inflight.discard(call)
+      for (const call of calls) this.inflight.discard(call, abort)
     }
     const signal = AbortSignal.any([request.signal, stop.signal])
     let response: Response

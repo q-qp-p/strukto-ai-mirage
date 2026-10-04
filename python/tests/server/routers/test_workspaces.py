@@ -32,6 +32,7 @@ from mirage.secrets.types import ResolvedSecret
 from mirage.server import build_app
 from mirage.server.env import ENV_HOME
 from mirage.server.registry import WorkspaceRegistry
+from mirage.server.routers import workspaces as workspaces_router
 from mirage.vfs.s3.config import S3Config
 
 
@@ -631,6 +632,18 @@ async def test_load_needs_one_source():
         assert "not both" in r.json()["detail"]
         r = await _upload(client, b"not a tar")
         assert r.status_code == 400, r.text
+
+
+@pytest.mark.asyncio
+async def test_load_refuses_a_snapshot_over_the_limit(monkeypatch):
+    monkeypatch.setattr(workspaces_router, "MAX_SNAPSHOT_PART", 8)
+    app, _ = _make_app_with_short_grace(grace=10.0)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        r = await _upload(client, b"x" * 9)
+    assert r.status_code == 413, r.text
+    assert r.json()["detail"] == "snapshot part too large"
 
 
 @pytest.mark.asyncio

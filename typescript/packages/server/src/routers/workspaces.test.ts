@@ -18,9 +18,22 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { Workspace } from '@struktoai/mirage-node'
 import { buildApp } from '../app.ts'
+import type * as multipart from '../multipart.ts'
 import { z } from '@struktoai/mirage-core/vfs/secrets'
 import { registerSecrets } from '@struktoai/mirage-core/secrets/registry'
 import { SecretsError } from '@struktoai/mirage-core/secrets/errors'
+
+const limits = vi.hoisted(() => ({ snapshot: undefined as number | undefined }))
+
+vi.mock('../multipart.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof multipart>()
+  return {
+    ...actual,
+    get MAX_SNAPSHOT_PART(): number {
+      return limits.snapshot ?? actual.MAX_SNAPSHOT_PART
+    },
+  }
+})
 
 const LoadAccountConfig = z.strictObject({ account: z.string().default('default') })
 type LoadAccountConfig = z.infer<typeof LoadAccountConfig>
@@ -675,6 +688,19 @@ describe('workspaces router', () => {
       const junk = await upload(app, new TextEncoder().encode('not a tar'))
       expect(junk.statusCode).toBe(400)
     } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  it('POST /v1/workspaces/load refuses a snapshot over the limit', async () => {
+    const app = buildApp()
+    limits.snapshot = 8
+    try {
+      const res = await upload(app, new Uint8Array(9))
+      expect(res.statusCode).toBe(413)
+      expect(res.json<{ detail: string }>().detail).toBe('snapshot part too large')
+    } finally {
+      limits.snapshot = undefined
       await app.close().catch(() => undefined)
     }
   })

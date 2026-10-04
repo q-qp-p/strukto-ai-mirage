@@ -62,6 +62,17 @@ async def _cat(ws: Workspace) -> str:
 
 
 @pytest.mark.asyncio
+async def test_the_size_counts_only_the_tar(tmp_path):
+    ws = await _written()
+    buffer = io.BytesIO(b"head")
+    buffer.seek(0, io.SEEK_END)
+    size = await ws.snapshot(buffer)
+    assert size == len(buffer.getvalue()) - len(b"head")
+    path = tmp_path / "w.tar"
+    assert await ws.snapshot(path) == path.stat().st_size
+
+
+@pytest.mark.asyncio
 async def test_a_snapshot_round_trips_through_bytes():
     buffer = io.BytesIO()
     size = await (await _written()).snapshot(buffer)

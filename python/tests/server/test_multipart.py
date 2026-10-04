@@ -55,6 +55,25 @@ async def test_data_survives_any_split():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "stdin",
+    [
+        f"a\r\n--{BOUNDARY}world".encode(),
+        f"a\r\n--{BOUNDARY}-x".encode(),
+        f"a\r\n--{BOUNDARY}\rx".encode(),
+    ],
+)
+async def test_a_boundary_not_followed_by_dashes_or_a_line_break_is_data(
+    stdin,
+):
+    body = HEAD + stdin + END
+    for chunks in ((body,), tuple(body[i : i + 1] for i in range(len(body)))):
+        events = await _events(*chunks)
+        data = b"".join(d for e, d in events if e is PartEvent.DATA)
+        assert data == stdin
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("chunks", "content_type", "detail"),
     [
         ((HEAD,), "multipart/form-data", "multipart body without a boundary"),

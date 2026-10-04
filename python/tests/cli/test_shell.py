@@ -12,9 +12,14 @@
 # limitations under the License.
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import json
 import os
+import signal
+from types import SimpleNamespace
+from typing import Any
 
 from httpx._utils import peek_filelike_length
+from typer.testing import CliRunner
 
 from mirage.cli import shell
 
@@ -30,3 +35,47 @@ def test_piped_stdin_is_sent_without_a_size(monkeypatch):
         assert peek_filelike_length(part) is None
         assert part.read(4) == b"only"
     os.close(write)
+
+
+class _Answer:
+    def __init__(self, status_code: int, body: dict[str, Any]) -> None:
+        self.status_code = status_code
+        self.content = json.dumps(body).encode()
+
+    def json(self) -> Any:
+        return json.loads(self.content)
+
+
+class _InterruptedSubmit:
+    """A server double that takes Ctrl-C while the line is submitted."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def ensure_running(self, allow_spawn: bool = True) -> None:
+        return None
+
+    def request(self, method: str, path: str, **kwargs: Any) -> _Answer:
+        self.calls.append((method, path))
+        if path.endswith("/shell"):
+            os.kill(os.getpid(), signal.SIGINT)
+            return _Answer(202, {"job_id": "j1"})
+        if method == "DELETE":
+            return _Answer(200, {})
+        return _Answer(200, {"finished_at": 1.0, "status": "canceled"})
+
+
+def test_ctrl_c_during_the_submit_cancels_the_job(monkeypatch):
+    client = _InterruptedSubmit()
+    monkeypatch.setattr(shell, "make_client", lambda: client)
+    tty = SimpleNamespace(isatty=lambda: True)
+    monkeypatch.setattr(shell, "sys", SimpleNamespace(stdin=tty))
+    result = CliRunner().invoke(shell.app, ["-w", "w", "-c", "sleep 20"])
+    assert result.exit_code == 130
+    assert ("DELETE", "/v1/jobs/j1") in client.calls

@@ -15,6 +15,7 @@
 import { Buffer } from 'node:buffer'
 
 export const MAX_REQUEST_PART = 1024 * 1024
+export const MAX_SNAPSHOT_PART = 1024 * 1024 * 1024
 const MAX_HEADER_COUNT = 8
 const MAX_HEADER_SIZE = 4096 + 128
 
@@ -80,13 +81,9 @@ class Parts {
         break
       }
       if (this.state === 'boundary') {
-        if (buf.length < 2) break
-        if (buf[0] === Parts.DASH && buf[1] === Parts.DASH) {
+        if (buf[0] === Parts.DASH) {
           this.state = 'end'
           continue
-        }
-        if (!buf.subarray(0, 2).equals(Parts.CRLF)) {
-          throw new MultipartError(400, 'bad multipart body: no line break after a boundary')
         }
         buf = buf.subarray(2)
         this.state = 'headers'
@@ -105,7 +102,7 @@ class Parts {
         this.state = 'data'
         continue
       }
-      const at = buf.indexOf(this.delimiter)
+      const at = this.delimiterAt(buf)
       if (at >= 0) {
         if (this.state === 'data') {
           if (at > 0) events.push({ kind: 'data', data: buf.subarray(0, at) })
@@ -126,15 +123,33 @@ class Parts {
     return events
   }
 
+  /**
+   * Where the next boundary starts, or -1. As python-multipart reads it,
+   * `\r\n--<boundary>` is one only when `--` or a line break follows;
+   * any other byte after it leaves it data.
+   */
+  private delimiterAt(buf: Buffer): number {
+    const size = this.delimiter.length
+    for (let at = buf.indexOf(this.delimiter); at >= 0; at = buf.indexOf(this.delimiter, at + 1)) {
+      const next = buf.subarray(at + size, at + size + 2)
+      if (next.length < 2) return -1
+      if (next.equals(Parts.CRLF) || (next[0] === Parts.DASH && next[1] === Parts.DASH)) {
+        return at
+      }
+    }
+    return -1
+  }
+
   /** How many trailing bytes of `buf` may be the start of the next boundary. */
   private held(buf: Buffer): number {
-    for (let i = Math.max(0, buf.length - this.delimiter.length + 1); i < buf.length; i++) {
-      if (
-        buf[i] === Parts.CR &&
-        buf.subarray(i).equals(this.delimiter.subarray(0, buf.length - i))
-      ) {
-        return buf.length - i
-      }
+    const size = this.delimiter.length
+    for (let i = Math.max(0, buf.length - size - 1); i < buf.length; i++) {
+      if (buf[i] !== Parts.CR) continue
+      const tail = buf.subarray(i)
+      const shared = Math.min(tail.length, size)
+      if (!tail.subarray(0, shared).equals(this.delimiter.subarray(0, shared))) continue
+      const after = tail[size]
+      if (after === undefined || after === Parts.CR || after === Parts.DASH) return tail.length
     }
     return 0
   }

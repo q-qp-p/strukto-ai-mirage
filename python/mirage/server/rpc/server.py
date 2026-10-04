@@ -219,6 +219,12 @@ class MirageRpcServer:
         """
         request_id = message.get("id")
         method = message.get("method")
+        if message.get("jsonrpc") != "2.0":
+            if "id" not in message:
+                return None
+            return error_response(
+                request_id, RPC_INVALID_REQUEST, 'jsonrpc must be "2.0"'
+            )
         if not isinstance(method, str):
             if "id" not in message:
                 return None

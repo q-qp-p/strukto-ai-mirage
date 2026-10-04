@@ -40,9 +40,9 @@ async function waitJob(
  * stdin it is one request that streams the input to the line as it
  * reads it, so the line starts before the input ends; Ctrl-C drops the
  * request, which cancels the job, and exits 130. Without piped stdin it
- * is submitted, then waited on, and Ctrl-C cancels it through
- * `DELETE /v1/jobs/:id`. `--bg` returns the job id at once instead,
- * after any piped stdin has been sent.
+ * is submitted, then waited on, and Ctrl-C, from the submit on, cancels
+ * it through `DELETE /v1/jobs/:id`. `--bg` returns the job id at once
+ * instead, after any piped stdin has been sent.
  */
 export function registerShellCommand(program: Command): void {
   program
@@ -98,28 +98,29 @@ export function registerShellCommand(program: Command): void {
           process.exitCode = exitCodeFromResponse(result)
           return
         }
-        const submittedResponse = piped
-          ? await c.requestUpload('POST', `${path}?background=true`, body, {
-              name: 'stdin',
-              data: process.stdin,
-            })
-          : await c.request('POST', `${path}?background=true`, { body: JSON.stringify(body) })
-        const submitted = (await handleResponse(submittedResponse)) as { job_id: string }
-        if (opts.bg === true) {
-          emit(submitted)
-          return
-        }
-        const jobId = encodeURIComponent(submitted.job_id)
-        const state = { interrupted: false }
+        const state: { interrupted: boolean; jobId?: string } = { interrupted: false }
         const interrupt = (): void => {
           if (state.interrupted) return
           state.interrupted = true
-          void c.request('DELETE', `/v1/jobs/${jobId}`)
+          if (state.jobId !== undefined) void c.request('DELETE', `/v1/jobs/${state.jobId}`)
         }
-        process.on('SIGINT', interrupt)
+        if (opts.bg !== true) process.on('SIGINT', interrupt)
         let job: Awaited<ReturnType<typeof waitJob>>
         try {
-          job = await waitJob(c, jobId)
+          const submittedResponse = piped
+            ? await c.requestUpload('POST', `${path}?background=true`, body, {
+                name: 'stdin',
+                data: process.stdin,
+              })
+            : await c.request('POST', `${path}?background=true`, { body: JSON.stringify(body) })
+          const submitted = (await handleResponse(submittedResponse)) as { job_id: string }
+          if (opts.bg === true) {
+            emit(submitted)
+            return
+          }
+          state.jobId = encodeURIComponent(submitted.job_id)
+          if (state.interrupted) await c.request('DELETE', `/v1/jobs/${state.jobId}`)
+          job = await waitJob(c, state.jobId)
         } finally {
           process.off('SIGINT', interrupt)
         }

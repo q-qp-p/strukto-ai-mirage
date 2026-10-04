@@ -33,7 +33,7 @@ import {
   type WorkspaceConfigRaw,
 } from '@struktoai/mirage-node'
 import { makeBrief, makeDetail } from '../summary.ts'
-import { MAX_REQUEST_PART, MultipartError, partEvents } from '../multipart.ts'
+import { MAX_REQUEST_PART, MAX_SNAPSHOT_PART, MultipartError, partEvents } from '../multipart.ts'
 
 export interface WorkspaceRoutesDeps {
   registry: WorkspaceRegistry
@@ -101,6 +101,7 @@ async function readLoadBody(req: FastifyRequest): Promise<[LoadWorkspaceBody, Ui
   const tar: Uint8Array[] = []
   const seen = new Set<string>()
   let size = 0
+  let tarSize = 0
   for await (const event of partEvents(req.raw, req.headers['content-type'] ?? '')) {
     if (event.kind === 'begin') {
       name = event.name
@@ -111,6 +112,8 @@ async function readLoadBody(req: FastifyRequest): Promise<[LoadWorkspaceBody, Ui
       if (size > MAX_REQUEST_PART) throw new MultipartError(413, 'request part too large')
     } else if (event.kind === 'data' && name === 'snapshot') {
       tar.push(event.data)
+      tarSize += event.data.byteLength
+      if (tarSize > MAX_SNAPSHOT_PART) throw new MultipartError(413, 'snapshot part too large')
     }
   }
   if (!seen.has('snapshot')) {
@@ -126,7 +129,8 @@ async function readLoadBody(req: FastifyRequest): Promise<[LoadWorkspaceBody, Ui
   if (body.key !== undefined) {
     throw new MultipartError(400, "load takes a 'key' or an uploaded 'snapshot', not both")
   }
-  return [body, new Uint8Array(Buffer.concat(tar))]
+  const joined = Buffer.concat(tar, tarSize)
+  return [body, new Uint8Array(joined.buffer, joined.byteOffset, joined.byteLength)]
 }
 
 function noStore(reply: FastifyReply): FastifyReply {

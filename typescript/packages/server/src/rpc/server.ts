@@ -228,6 +228,10 @@ export class MirageRpcServer {
   async handle(message: Message, signal?: AbortSignal): Promise<Response | null> {
     const requestId = (message.id ?? null) as JsonValue
     const method = message.method
+    if (message.jsonrpc !== '2.0') {
+      if (!('id' in message)) return null
+      return errorResponse(requestId, RPC_INVALID_REQUEST, 'jsonrpc must be "2.0"')
+    }
     if (typeof method !== 'string') {
       if (!('id' in message)) return null
       return errorResponse(requestId, RPC_INVALID_REQUEST, 'method must be a string')
@@ -242,6 +246,7 @@ export class MirageRpcServer {
       return errorResponse(requestId, RPC_INVALID_PARAMS, 'params must be an object')
     }
     try {
+      signal?.throwIfAborted()
       const result = await handler(params as Params, signal)
       return { jsonrpc: '2.0', id: requestId, result }
     } catch (err) {

@@ -54,6 +54,16 @@ describe('partEvents', () => {
     expect(data(await events(...split))).toBe(stdin)
   })
 
+  it.each([`a\r\n--${BOUNDARY}world`, `a\r\n--${BOUNDARY}-x`, `a\r\n--${BOUNDARY}\rx`])(
+    'keeps a boundary not followed by -- or a line break as data: %j',
+    async (stdin) => {
+      const body = Buffer.concat([HEAD, Buffer.from(stdin), END])
+      expect(data(await events(body))).toBe(stdin)
+      const bytes = Array.from(body, (byte) => Buffer.from([byte]))
+      expect(data(await events(...bytes))).toBe(stdin)
+    },
+  )
+
   it.each([
     [[HEAD], 'multipart/form-data', 'multipart body without a boundary'],
     [[HEAD, Buffer.from('ab')], CONTENT_TYPE, 'multipart body ended early'],

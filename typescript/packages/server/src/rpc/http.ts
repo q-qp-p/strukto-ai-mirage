@@ -66,6 +66,7 @@ class DaemonRpcServer extends MirageRpcServer {
     const jobId = job.id
     const cancel = (): void => void this.jobs.cancel(jobId)
     signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted === true) cancel()
     try {
       job = await this.jobs.wait(jobId)
     } finally {
@@ -124,7 +125,7 @@ class RpcDoor {
     reply.raw.once('close', () => {
       if (!reply.raw.writableFinished) stop.abort()
     })
-    const keys: string[] = []
+    const held: [string, () => void][] = []
     const answers: Promise<Record<string, JsonValue> | null>[] = []
     for (const message of messages) {
       if (typeof message !== 'object' || message === null || Array.isArray(message)) {
@@ -143,10 +144,11 @@ class RpcDoor {
       const signal = AbortSignal.any([stop.signal, own.signal])
       if ('id' in record) {
         const key = InFlight.key(workspaceId, server.sessionId, record.id as JsonValue)
-        this.inflight.add(key, () => {
+        const abort = (): void => {
           own.abort()
-        })
-        keys.push(key)
+        }
+        this.inflight.add(key, abort)
+        held.push([key, abort])
       }
       answers.push(server.handle(record, signal))
     }
@@ -154,7 +156,7 @@ class RpcDoor {
     try {
       responses = await Promise.all(answers)
     } finally {
-      for (const key of keys) this.inflight.discard(key)
+      for (const [key, abort] of held) this.inflight.discard(key, abort)
     }
     const sent = responses.filter((response) => response !== null)
     if (sent.length === 0) return reply.status(204).send()

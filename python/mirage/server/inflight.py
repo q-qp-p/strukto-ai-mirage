@@ -44,11 +44,12 @@ class InFlight:
     client's cancel (MCP's ``notifications/cancelled``, RPC's
     ``$/cancelRequest``) comes in on a request of its own. Calls are
     keyed by the workspace, the session and the request id the client
-    chose.
+    chose; two callers in one session that reuse an id each hold their
+    own call under it, and a cancel for the id stops both.
     """
 
     def __init__(self) -> None:
-        self._running: dict[str, Callable[[], bool]] = {}
+        self._running: dict[str, list[Callable[[], bool]]] = {}
 
     @staticmethod
     def key(workspace_id: str, session_id: str, request_id: JsonValue) -> str:
@@ -71,27 +72,31 @@ class InFlight:
             key (str): the call's key.
             cancel (Callable[[], bool]): stops it.
         """
-        self._running[key] = cancel
+        self._running.setdefault(key, []).append(cancel)
 
-    def discard(self, key: str) -> None:
-        """Forget a call that settled.
+    def discard(self, key: str, cancel: Callable[[], bool]) -> None:
+        """Forget a call that settled, leaving any other under its key.
 
         Args:
             key (str): the call's key.
+            cancel (Callable[[], bool]): what it was added with.
         """
-        self._running.pop(key, None)
+        calls = self._running.get(key, [])
+        if cancel in calls:
+            calls.remove(cancel)
+        if not calls:
+            self._running.pop(key, None)
 
     def cancel(self, key: str) -> bool:
-        """Stop a running call.
+        """Stop every call running under a key.
 
         Args:
-            key (str): the call's key.
+            key (str): the calls' key.
 
         Returns:
             bool: True when a call was running under the key.
         """
-        cancel = self._running.pop(key, None)
-        if cancel is None:
-            return False
-        cancel()
-        return True
+        calls = self._running.pop(key, [])
+        for cancel in calls:
+            cancel()
+        return bool(calls)

@@ -30,9 +30,25 @@ describe('InFlight', () => {
   it('does not cancel a discarded call', () => {
     const inflight = new InFlight()
     const key = InFlight.key('ws', 's', 'a')
-    inflight.add(key, () => undefined)
-    inflight.discard(key)
+    const cancel = (): void => undefined
+    inflight.add(key, cancel)
+    inflight.discard(key, cancel)
     expect(inflight.cancel(key)).toBe(false)
+  })
+
+  it('keeps two calls that share an id apart', () => {
+    const inflight = new InFlight()
+    const stopped: string[] = []
+    const key = InFlight.key('ws', 's', 1)
+    const first = (): void => void stopped.push('first')
+    const second = (): void => void stopped.push('second')
+    const third = (): void => void stopped.push('third')
+    inflight.add(key, first)
+    inflight.add(key, second)
+    inflight.add(key, third)
+    inflight.discard(key, first)
+    expect(inflight.cancel(key)).toBe(true)
+    expect(stopped).toEqual(['second', 'third'])
   })
 
   it('reads one message or a batch', () => {

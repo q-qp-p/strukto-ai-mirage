@@ -28,29 +28,35 @@ export function rpcMessages(body: unknown): Record<string, unknown>[] {
  * reaches them. A stateless endpoint answers each HTTP request on its
  * own, so a client's cancel (MCP's `notifications/cancelled`, RPC's
  * `$/cancelRequest`) comes in on a request of its own. Calls are keyed by
- * the workspace, the session and the request id the client chose.
+ * the workspace, the session and the request id the client chose; two
+ * callers in one session that reuse an id each hold their own call under
+ * it, and a cancel for the id stops both.
  */
 export class InFlight {
-  private readonly running = new Map<string, () => void>()
+  private readonly running = new Map<string, (() => void)[]>()
 
   static key(workspaceId: string, sessionId: string, requestId: JsonValue | undefined): string {
     return JSON.stringify([workspaceId, sessionId, requestId ?? null])
   }
 
   add(key: string, cancel: () => void): void {
-    this.running.set(key, cancel)
+    const calls = this.running.get(key)
+    if (calls === undefined) this.running.set(key, [cancel])
+    else calls.push(cancel)
   }
 
-  discard(key: string): void {
-    this.running.delete(key)
+  /** Forget a call that settled, leaving any other under its key. */
+  discard(key: string, cancel: () => void): void {
+    const calls = (this.running.get(key) ?? []).filter((c) => c !== cancel)
+    if (calls.length === 0) this.running.delete(key)
+    else this.running.set(key, calls)
   }
 
-  /** Stop a running call; false when none runs under the key. */
+  /** Stop every call running under a key; false when none runs. */
   cancel(key: string): boolean {
-    const cancel = this.running.get(key)
-    if (cancel === undefined) return false
+    const calls = this.running.get(key) ?? []
     this.running.delete(key)
-    cancel()
-    return true
+    for (const cancel of calls) cancel()
+    return calls.length > 0
   }
 }

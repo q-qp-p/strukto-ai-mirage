@@ -79,7 +79,7 @@ Send the notification `$/cancelRequest` with the id of a running request. That r
 | Code | When |
 | --- | --- |
 | `-32700` | Not JSON. |
-| `-32600` | Not a JSON-RPC message. |
+| `-32600` | Not a JSON-RPC 2.0 request: no `"jsonrpc": "2.0"`, or no method. |
 | `-32601` | No such method. |
 | `-32602` | Bad params. |
 | `-32004` | No such path (`ENOENT`). |

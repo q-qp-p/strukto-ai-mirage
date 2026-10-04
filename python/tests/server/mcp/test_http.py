@@ -10,6 +10,7 @@ import uvicorn
 from fastapi import FastAPI
 from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, CallToolResult
 
@@ -323,4 +324,37 @@ async def test_lets_go_of_a_call_once_its_answer_is_read(tmp_path):
                 await asyncio.sleep(0.01)
         assert "hi" in answered.text
         added.assert_called_once()
-        discarded.assert_called_with(added.call_args.args[0])
+        discarded.assert_called_with(*added.call_args.args)
+
+
+@pytest.mark.asyncio
+async def test_a_body_over_the_limit_is_refused_before_it_is_all_read(
+    tmp_path,
+):
+    async with daemon(tmp_path) as (base, app):
+        workspace_id = await create_workspace(base)
+        chunk = b" " * 65536
+        read = 0
+        statuses: list[int] = []
+
+        async def receive() -> dict:
+            nonlocal read
+            read += len(chunk)
+            await asyncio.sleep(0)
+            return {"type": "http.request", "body": chunk, "more_body": True}
+
+        async def send(message: dict) -> None:
+            if message["type"] == "http.response.start":
+                statuses.append(message["status"])
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": f"/v1/workspaces/{workspace_id}/mcp",
+            "path_params": {"workspace_id": workspace_id},
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        }
+        await asyncio.wait_for(app.state.mcp(scope, receive, send), 10)
+        assert statuses == [413]
+        assert read <= DEFAULT_MAX_REQUEST_BODY_SIZE + len(chunk)

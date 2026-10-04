@@ -116,6 +116,37 @@ describe('MirageRpcServer', () => {
     expect(await rpc.handle({ jsonrpc: '2.0', method: 'shell' })).toBeNull()
   })
 
+  it('runs nothing for a message without jsonrpc 2.0', async () => {
+    const rpc = server()
+    await call(rpc, 'vfs/write', { path: '/keep.txt', data_base64: b64('x') })
+    const refused = await rpc.handle({
+      id: 2,
+      method: 'vfs/unlink',
+      params: { path: '/keep.txt' },
+    })
+    expect((refused?.error as { code: number } | undefined)?.code).toBe(-32600)
+    expect((await call(rpc, 'vfs/exists', { path: '/keep.txt' })).result).toEqual({
+      exists: true,
+    })
+  })
+
+  it('starts nothing for a request cancelled before it runs', async () => {
+    const rpc = server()
+    const cancelled = await rpc.handle(
+      {
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'vfs/write',
+        params: { path: '/late.txt', data_base64: b64('x') },
+      },
+      AbortSignal.abort(),
+    )
+    expect((cancelled?.error as { code: number } | undefined)?.code).toBe(-32800)
+    expect((await call(rpc, 'vfs/exists', { path: '/late.txt' })).result).toEqual({
+      exists: false,
+    })
+  })
+
   it('serve answers lines and cancels a running request', async () => {
     const rpc = server()
     const out: Record<string, unknown>[] = []

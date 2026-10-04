@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from python_multipart.multipart import MultipartCallbacks
 
 MAX_REQUEST_PART = 1024 * 1024
+MAX_SNAPSHOT_PART = 1024 * 1024 * 1024
 MAX_HEADER_COUNT = 8
 MAX_HEADER_SIZE = 4096 + 128
 

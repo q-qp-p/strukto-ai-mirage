@@ -20,6 +20,7 @@ import anyio
 from fastapi import FastAPI
 from mcp.server import Server, ServerRequestContext
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.server.transport_security import DEFAULT_MAX_REQUEST_BODY_SIZE
 from mcp.shared.exceptions import MCPError
 from mcp.types import (
     INVALID_REQUEST,
@@ -213,7 +214,16 @@ class McpDoor:
         if scope["method"] != "POST":
             await self._manager.handle_request(scope, receive, send)
             return
-        body = await request.body()
+        received = bytearray()
+        async for chunk in request.stream():
+            received += chunk
+            if len(received) > DEFAULT_MAX_REQUEST_BODY_SIZE:
+                response = JSONResponse(
+                    {"detail": "request body too large"}, status_code=413
+                )
+                await response(scope, receive, send)
+                return
+        body = bytes(received)
         session_id = served[1].session_id
         calls = []
         for message in rpc_messages(body):
@@ -318,7 +328,7 @@ class McpDoor:
             held.set()
             watcher.cancel()
             for call in calls:
-                self.inflight.discard(call)
+                self.inflight.discard(call, task.cancel)
 
     async def _start(self) -> None:
         if self._task is None:

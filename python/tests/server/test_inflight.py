@@ -20,9 +20,28 @@ def test_cancel_reaches_a_held_call_once():
 def test_a_discarded_call_is_not_cancelled():
     inflight = InFlight()
     key = InFlight.key("ws", "s", "a")
-    inflight.add(key, lambda: True)
-    inflight.discard(key)
+
+    def cancel() -> bool:
+        return True
+
+    inflight.add(key, cancel)
+    inflight.discard(key, cancel)
     assert inflight.cancel(key) is False
+
+
+def test_two_calls_that_share_an_id_stay_apart():
+    inflight = InFlight()
+    stopped: list[str] = []
+    key = InFlight.key("ws", "s", 1)
+    calls = {
+        name: (lambda name=name: stopped.append(name) is None)
+        for name in ("first", "second", "third")
+    }
+    for cancel in calls.values():
+        inflight.add(key, cancel)
+    inflight.discard(key, calls["first"])
+    assert inflight.cancel(key) is True
+    assert stopped == ["second", "third"]
 
 
 def test_rpc_messages_reads_one_or_a_batch():

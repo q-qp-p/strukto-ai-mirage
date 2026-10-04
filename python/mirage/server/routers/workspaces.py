@@ -29,7 +29,12 @@ from mirage.server.clone import (
     build_override_mounts,
     clone_workspace_with_override,
 )
-from mirage.server.multipart import MAX_REQUEST_PART, PartEvent, part_events
+from mirage.server.multipart import (
+    MAX_REQUEST_PART,
+    MAX_SNAPSHOT_PART,
+    PartEvent,
+    part_events,
+)
 from mirage.server.schemas import (
     CloneWorkspaceRequest,
     CreateWorkspaceRequest,
@@ -242,7 +247,7 @@ async def download_snapshot(workspace_id: str, request: Request) -> Response:
     entry = registry.get(workspace_id)
     buffer = io.BytesIO()
     await entry.runner.call(entry.runner.ws.snapshot(buffer))
-    return Response(content=buffer.getvalue(), media_type="application/x-tar")
+    return Response(content=buffer.getbuffer(), media_type="application/x-tar")
 
 
 @router.post(
@@ -264,7 +269,7 @@ async def snapshot_workspace(
 async def load_workspace(request: Request) -> WorkspaceDetail:
     registry = request.app.state.registry
     content_type = request.headers.get("content-type", "")
-    tar: bytes | None = None
+    tar: io.BytesIO | None = None
     if content_type.startswith("multipart/"):
         req, tar = await _read_load_body(request, content_type)
     else:
@@ -280,7 +285,7 @@ async def load_workspace(request: Request) -> WorkspaceDetail:
             status_code=409, detail=f"workspace id already exists: {req.id!r}"
         )
     store: S3Config | None = None
-    source: Any = io.BytesIO(tar) if tar is not None else req.key
+    source: Any = tar if tar is not None else req.key
     if tar is None:
         store = _snapshot_store(request)
     secrets = _build_load_secrets(req.override)
@@ -348,25 +353,26 @@ def _parse_load_request(body: bytes) -> LoadWorkspaceRequest:
 
 async def _read_load_body(
     request: Request, content_type: str
-) -> tuple[LoadWorkspaceRequest, bytes]:
+) -> tuple[LoadWorkspaceRequest, io.BytesIO]:
     """Read an uploaded snapshot: a ``request`` part, then the tar.
 
-    The tar is held in memory, never spooled to the server's disk.
+    The tar is held in memory, never spooled to the server's disk, up to
+    ``MAX_SNAPSHOT_PART`` bytes.
 
     Args:
         request (Request): the load request.
         content_type (str): its ``Content-Type`` header.
 
     Returns:
-        tuple[LoadWorkspaceRequest, bytes]: the request and the tar.
+        tuple[LoadWorkspaceRequest, io.BytesIO]: the request and the tar.
 
     Raises:
         HTTPException: 400 for a body without both parts, or with a
-            ``key``; 413 for an oversized request part.
+            ``key``; 413 for an oversized part.
     """
     name = b""
     body = bytearray()
-    tar = bytearray()
+    tar = io.BytesIO()
     seen: set[bytes] = set()
     async for event, data in part_events(request.stream(), content_type):
         if event is PartEvent.BEGIN:
@@ -379,7 +385,11 @@ async def _read_load_body(
                     status_code=413, detail="request part too large"
                 )
         elif event is PartEvent.DATA and name == b"snapshot":
-            tar += data
+            tar.write(data)
+            if tar.tell() > MAX_SNAPSHOT_PART:
+                raise HTTPException(
+                    status_code=413, detail="snapshot part too large"
+                )
     if b"snapshot" not in seen:
         raise HTTPException(
             status_code=400, detail="multipart body missing 'snapshot' part"
@@ -390,7 +400,8 @@ async def _read_load_body(
             status_code=400,
             detail="load takes a 'key' or an uploaded 'snapshot', not both",
         )
-    return req, bytes(tar)
+    tar.seek(0)
+    return req, tar
 
 
 def _build_load_secrets(

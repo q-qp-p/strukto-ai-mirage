@@ -122,6 +122,21 @@ async def test_errors_carry_codes_and_the_errno():
 
 
 @pytest.mark.asyncio
+async def test_a_message_without_jsonrpc_2_0_runs_nothing():
+    rpc = server()
+    await call(
+        rpc, "vfs/write", {"path": "/keep.txt", "data_base64": b64("x")}
+    )
+    refused = await rpc.handle(
+        {"id": 2, "method": "vfs/unlink", "params": {"path": "/keep.txt"}}
+    )
+    assert refused is not None
+    assert refused["error"]["code"] == -32600
+    kept = await call(rpc, "vfs/exists", {"path": "/keep.txt"})
+    assert kept["result"] == {"exists": True}
+
+
+@pytest.mark.asyncio
 async def test_serve_answers_lines_and_cancels_a_running_request():
     rpc = server()
     lines: asyncio.Queue[str] = asyncio.Queue()
