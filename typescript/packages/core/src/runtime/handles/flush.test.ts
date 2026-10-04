@@ -19,7 +19,6 @@ const enc = new TextEncoder()
 
 function plan(over: Partial<Parameters<typeof planFlush>[0]>): ReturnType<typeof planFlush> {
   return planFlush({
-    fresh: false,
     baseLen: 3,
     runs: [],
     cut: null,
@@ -30,10 +29,9 @@ function plan(over: Partial<Parameters<typeof planFlush>[0]>): ReturnType<typeof
 }
 
 describe('planFlush', () => {
-  it('sends a created file whole with its gaps', () => {
+  it('sends only the ranges of a created file', () => {
     expect(
       plan({
-        fresh: true,
         baseLen: 0,
         runs: [
           [0, enc.encode('ab')],
@@ -41,7 +39,10 @@ describe('planFlush', () => {
         ],
         size: 4,
       }),
-    ).toEqual([{ kind: 'write', data: enc.encode('ab\0c') }])
+    ).toEqual([
+      { kind: 'pwrite', data: enc.encode('ab'), offset: 0 },
+      { kind: 'pwrite', data: enc.encode('c'), offset: 3 },
+    ])
   })
 
   it('sends a range at the end as an append', () => {

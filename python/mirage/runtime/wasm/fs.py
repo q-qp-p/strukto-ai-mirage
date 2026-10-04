@@ -376,7 +376,12 @@ class WasiFs:
                 continue
             try:
                 self._fs.flush(h.path, h.flush_plan())
-            except OSError as exc:
+            except (
+                OSError,
+                ValueError,
+                NotImplementedError,
+                CrossMountError,
+            ) as exc:
                 failures.append(f"{h.path}: {exc}")
         return failures
 

@@ -97,11 +97,14 @@ def test_extending_the_end_goes_as_an_append():
     assert h.flush_plan() == [FlushStep("append", data=b"de")]
 
 
-def test_a_created_file_goes_whole():
+def test_a_created_file_sends_only_its_ranges():
     h = FileHandle.opened("/f", None, size=0, writable=True, append=False)
     h.write(b"new")
     h.pwrite(5, b"!")
-    assert h.flush_plan() == [FlushStep("write", data=b"new\0\0!")]
+    assert h.flush_plan() == [
+        FlushStep("pwrite", data=b"new", offset=0),
+        FlushStep("pwrite", data=b"!", offset=5),
+    ]
 
 
 def test_truncate_cuts_then_ranges_then_growth():

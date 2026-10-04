@@ -19,7 +19,6 @@ from mirage.runtime.handles.types import FlushStep
 
 def plan_flush(
     *,
-    fresh: bool,
     base_len: int,
     runs: Sequence[tuple[int, bytes | bytearray]],
     cut: int | None,
@@ -30,15 +29,12 @@ def plan_flush(
 
     A handle keeps what it wrote as byte ranges, so it owes the mount
     those ranges and nothing it only read: another writer's bytes
-    between them stay. A file the open created or emptied is all the
-    handle's, so it goes as one write. Otherwise a cut goes first, then
-    the ranges, then any growth past them; a lone range that starts
-    where the file ended, or anything an append-mode handle wrote, goes
-    as an append, which lands at the mount's own end.
+    between them stay, a file the open created or emptied included. A
+    cut goes first, then the ranges, then any growth past them; a lone
+    range that starts where the file ended, or anything an append-mode
+    handle wrote, goes as an append, which lands at the mount's own end.
 
     Args:
-        fresh (bool): the open created or emptied the file, so nothing
-            stored before it survives.
         base_len (int): the file's length when the handle opened it.
         runs (Sequence[tuple[int, bytes | bytearray]]): the written ranges as
             (offset, bytes), sorted and disjoint.
@@ -47,11 +43,6 @@ def plan_flush(
         size (int): the file's length as the handle holds it.
         appending (bool): the handle was opened in append mode.
     """
-    if fresh:
-        whole = bytearray(size)
-        for offset, data in runs:
-            whole[offset : offset + len(data)] = data
-        return [FlushStep("write", data=bytes(whole))]
     steps: list[FlushStep] = []
     end = base_len
     if cut is not None:

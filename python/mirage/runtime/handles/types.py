@@ -23,14 +23,7 @@ FileFetch = Callable[[int, int | None], bytes]
 
 @dataclass(frozen=True, slots=True)
 class FlushStep:
-    """One op a closing handle owes the mount.
-
-    Args:
-        kind (FlushKind): the op to dispatch.
-        data (bytes): the payload of a write, append or pwrite.
-        offset (int): where a pwrite lands.
-        length (int): the length a truncate leaves.
-    """
+    """One op a closing handle owes the mount."""
 
     kind: FlushKind
     data: bytes = b""

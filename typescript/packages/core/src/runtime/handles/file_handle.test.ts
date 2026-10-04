@@ -104,11 +104,14 @@ describe('FileHandle', () => {
     expect(h.pread(0, 9)).toEqual(enc.encode('ab\0\0Z'))
   })
 
-  it('sends a created file whole', () => {
+  it('sends only the ranges of a created file', () => {
     const h = FileHandle.opened('/f', null, { size: 0, writable: true, append: false })
     h.write(enc.encode('new'))
     h.pwrite(5, enc.encode('!'))
-    expect(h.flushPlan()).toEqual([{ kind: 'write', data: enc.encode('new\0\0!') }])
+    expect(h.flushPlan()).toEqual([
+      { kind: 'pwrite', data: enc.encode('new'), offset: 0 },
+      { kind: 'pwrite', data: enc.encode('!'), offset: 5 },
+    ])
   })
 
   it('cuts, then writes ranges, then grows', async () => {
@@ -138,6 +141,20 @@ describe('FileHandle', () => {
     }
     expect(lines).toEqual(['one', 'TWO', 'three'])
     expect(h.eof).toBe(true)
+  })
+
+  it('reads a line on through a stored newline a write covered', async () => {
+    const tail = 'x'.repeat(READ_CHUNK)
+    const h = handle(`ab\n${tail}\nend`)
+    h.pwrite(2, enc.encode('Z'))
+    const lines: string[] = []
+    for (;;) {
+      while (h.lacksLine()) await h.fill(0)
+      const line = h.readLine()
+      if (line === null) break
+      lines.push(dec.decode(line))
+    }
+    expect(lines).toEqual([`abZ${tail}`, 'end'])
   })
 
   it('owes nothing when it only read', async () => {

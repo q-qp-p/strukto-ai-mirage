@@ -14,12 +14,7 @@
 
 export type FlushKind = 'write' | 'append' | 'pwrite' | 'truncate'
 
-/**
- * One op a closing handle owes the mount. Mirrors Python's `FlushStep`.
- *
- * `data` is the payload of a write, append or pwrite, `offset` where a
- * pwrite lands, and `length` the length a truncate leaves.
- */
+/** One op a closing handle owes the mount. Mirrors Python's `FlushStep`. */
 export interface FlushStep {
   readonly kind: FlushKind
   readonly data?: Uint8Array

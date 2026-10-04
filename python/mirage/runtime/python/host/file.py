@@ -263,6 +263,7 @@ class MirageFile:
             self.flush()
         finally:
             self._closed = True
+            self._buf.close()
 
     def __del__(self) -> None:
         try:

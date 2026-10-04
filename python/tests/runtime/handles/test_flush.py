@@ -18,7 +18,6 @@ from mirage.runtime.handles.types import FlushStep
 
 def _plan(**over):
     facts = {
-        "fresh": False,
         "base_len": 3,
         "runs": [],
         "cut": None,
@@ -28,10 +27,11 @@ def _plan(**over):
     return plan_flush(**{**facts, **over})
 
 
-def test_a_created_file_goes_whole_with_its_gaps():
-    assert _plan(
-        fresh=True, base_len=0, runs=[(0, b"ab"), (3, b"c")], size=4
-    ) == [FlushStep("write", data=b"ab\0c")]
+def test_a_created_file_sends_only_its_ranges():
+    assert _plan(base_len=0, runs=[(0, b"ab"), (3, b"c")], size=4) == [
+        FlushStep("pwrite", data=b"ab", offset=0),
+        FlushStep("pwrite", data=b"c", offset=3),
+    ]
 
 
 def test_a_range_at_the_end_goes_as_an_append():

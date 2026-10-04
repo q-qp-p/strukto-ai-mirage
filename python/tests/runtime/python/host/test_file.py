@@ -158,6 +158,28 @@ class TestMirageFile:
             f.write("changed")
         assert _read(ops, "/data/dir/f.txt") == b"changedl"
 
+    def test_w_plus_truncates_at_open_and_reads_back_its_writes(self):
+        ops, _ = make_ops_with_dir()
+        _write(ops, "/data/dir/f.txt", b"original")
+        with MirageFile(ops, "/data/dir/f.txt", "w+") as f:
+            assert _read(ops, "/data/dir/f.txt") == b""
+            f.write("fresh")
+            f.seek(0)
+            assert f.read() == "fresh"
+        assert _read(ops, "/data/dir/f.txt") == b"fresh"
+
+    def test_a_plus_writes_at_the_end_after_a_seek(self):
+        ops, _ = make_ops_with_dir()
+        _write(ops, "/data/dir/f.txt", b"one\n")
+        with MirageFile(ops, "/data/dir/f.txt", "a+") as f:
+            f.seek(0)
+            assert f.read() == "one\n"
+            f.seek(0)
+            f.write("two\n")
+            f.seek(0)
+            assert f.read() == "one\ntwo\n"
+        assert _read(ops, "/data/dir/f.txt") == b"one\ntwo\n"
+
     def test_flush_persists_before_close(self):
         ops, _ = make_ops_with_dir()
         f = MirageFile(ops, "/data/dir/f.txt", "w")

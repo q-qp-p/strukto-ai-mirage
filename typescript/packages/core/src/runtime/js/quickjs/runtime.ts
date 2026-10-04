@@ -209,7 +209,7 @@ export class QuickJsRuntime extends JsRuntime implements Evaluator {
       // std.open/os.readdir, so a JS policy script can read mounted
       // content (the python evaluator gets this via run()'s RuntimeVFS).
       const vfs = context !== undefined ? RuntimeVFS.of(context) : null
-      installQuickJsFs(ctx, vfs)
+      const closeAll = installQuickJsFs(ctx, vfs)
       const boot = ctx.evalCode(BOOTSTRAP, 'mirage:bootstrap')
       if (boot.error) {
         boot.error.dispose()
@@ -234,6 +234,7 @@ export class QuickJsRuntime extends JsRuntime implements Evaluator {
       if (result.error) {
         const message = this.formatError(ctx, result.error)
         result.error.dispose()
+        await closeAll()
         if (timedOut.value) {
           throw new EvalError(`quickjs eval timed out after ${String(EVAL_INTERRUPT_SECONDS)}s`)
         }
@@ -242,6 +243,10 @@ export class QuickJsRuntime extends JsRuntime implements Evaluator {
       const dumped: unknown = ctx.dump(result.value)
       result.value.dispose()
       const drained = this.drainJobs(runtime, ctx, err)
+      // Files the evaluation left open still owe the mount their writes,
+      // as they do when run() ends.
+      const lost = await closeAll()
+      for (const line of lost) err.push(`${this.name}: ${line}\n`)
       if (drained !== null && drained !== 0) {
         throw new EvalError(err.join('').trim() || 'quickjs eval failed while draining jobs')
       }

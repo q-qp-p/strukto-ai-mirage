@@ -123,11 +123,21 @@ export class FileHandle {
     return this.base.lacks(want)
   }
 
-  /** Whether the line at the position needs a fetch first. */
+  /**
+   * Whether the line at the position needs a fetch first.
+   *
+   * Asked of what `readLine` reads, the stored bytes with the written
+   * ranges over them: a write can cover a stored newline, so the line
+   * may run past the window the stored bytes alone would end it in.
+   */
   lacksLine(): boolean {
-    if (this.base === null || (this.cut !== null && this.pos >= this.cut)) return false
-    this.base.pos = this.pos
-    return this.base.lacksLine()
+    let at = this.pos
+    for (;;) {
+      if (this.lacksAt(at, LINE_SCAN)) return true
+      const chunk = this.pread(at, LINE_SCAN)
+      if (chunk.length === 0 || chunk.includes(0x0a)) return false
+      at += chunk.length
+    }
   }
 
   /** Fetch what a read of `size` bytes at the position lacks; any other size, one more chunk. */
@@ -269,7 +279,6 @@ export class FileHandle {
   flushPlan(): FlushStep[] {
     if (!this.dirty) return []
     return planFlush({
-      fresh: this.base === null,
       baseLen: this.baseLen,
       runs: this.runs.map((run): [number, Uint8Array] => [run.start, run.buf.slice(0, run.length)]),
       cut: this.cut,
@@ -286,6 +295,12 @@ export class FileHandle {
   private runsEnd(): number {
     const last = this.runs.at(-1)
     return last === undefined ? 0 : last.start + last.length
+  }
+
+  private lacksAt(offset: number, size: number): boolean {
+    if (this.base === null || (this.cut !== null && offset >= this.cut)) return false
+    this.base.pos = offset
+    return this.base.lacks(this.cut === null ? size : Math.min(size, this.cut - offset))
   }
 
   private storedWant(size: number): number {

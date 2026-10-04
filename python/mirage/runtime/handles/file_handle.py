@@ -318,7 +318,6 @@ class FileHandle:
         if not self.dirty:
             return []
         return plan_flush(
-            fresh=self.base is None,
             base_len=self.base_len,
             runs=self.runs,
             cut=self.cut,

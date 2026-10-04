@@ -19,15 +19,13 @@ import type { FlushStep } from './types.ts'
  *
  * A handle keeps what it wrote as byte ranges, so it owes the mount those
  * ranges and nothing it only read: another writer's bytes between them
- * stay. A file the open created or emptied is all the handle's, so it goes
- * as one write. Otherwise a cut goes first, then the ranges, then any
- * growth past them; a lone range that starts where the file ended, or
- * anything an append-mode handle wrote, goes as an append, which lands at
- * the mount's own end. Mirrors Python's `plan_flush`.
+ * stay, a file the open created or emptied included. A cut goes first,
+ * then the ranges, then any growth past them; a lone range that starts
+ * where the file ended, or anything an append-mode handle wrote, goes as
+ * an append, which lands at the mount's own end. Mirrors Python's
+ * `plan_flush`.
  *
  * Args:
- *   fresh: the open created or emptied the file, so nothing stored before
- *     it survives.
  *   baseLen: the file's length when the handle opened it.
  *   runs: the written ranges as [offset, bytes], sorted and disjoint.
  *   cut: the shortest length a truncate left the stored bytes at, or null
@@ -36,19 +34,13 @@ import type { FlushStep } from './types.ts'
  *   appending: the handle was opened in append mode.
  */
 export function planFlush(facts: {
-  fresh: boolean
   baseLen: number
   runs: readonly (readonly [number, Uint8Array])[]
   cut: number | null
   size: number
   appending: boolean
 }): FlushStep[] {
-  const { fresh, baseLen, runs, cut, size, appending } = facts
-  if (fresh) {
-    const whole = new Uint8Array(size)
-    for (const [offset, data] of runs) whole.set(data, offset)
-    return [{ kind: 'write', data: whole }]
-  }
+  const { baseLen, runs, cut, size, appending } = facts
   const steps: FlushStep[] = []
   let end = baseLen
   if (cut !== null) {
