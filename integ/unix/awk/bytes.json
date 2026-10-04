@@ -123,6 +123,26 @@
         "stdout": " c3 a9 ff 0a\n 00 20 ff 20 ac 0a\n",
         "stderr": ""
       }
+    },
+    {
+      "id": "awk_bytes_escape_classes",
+      "seq": 14470210,
+      "command": "( export LC_ALL=C; printf 'A\\302\\240B\\377\\n' | awk '{gsub(/\\s/,\"_\"); print; print ($0 ~ /\\w$/)}' | od -An -tx1 )",
+      "expect": {
+        "exit": 0,
+        "stdout": " 41 c2 a0 42 ff 0a 30 0a\n",
+        "stderr": ""
+      }
+    },
+    {
+      "id": "awk_bytes_program_file",
+      "seq": 14470211,
+      "command": "( export LC_ALL=C; printf '{sub(/\\351/, \"E\")} 1\\nEND{print \"\\351\"}\\n' > /data/bytes.awk; printf 'caf\\351\\n' | awk -f /data/bytes.awk | od -An -tx1 )",
+      "expect": {
+        "exit": 0,
+        "stdout": " 63 61 66 45 0a e9 0a\n",
+        "stderr": ""
+      }
     }
   ]
 }

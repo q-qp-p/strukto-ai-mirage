@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from mirage.commands.builtin.utils.escapes import interpret_escapes
 from mirage.commands.builtin.utils.stream import resolve_source
-from mirage.commands.quote import quote_text
+from mirage.commands.quote import quote_text, quote_word
 from mirage.commands.spec import SPECS
 from mirage.commands.spec.flag_view import FlagView
 from mirage.commands.spec.types import CommandName, FlagValue
@@ -14,6 +14,16 @@ from mirage.types import PathSpec
 from mirage.utils.posix import class_characters
 
 _TRY_HELP = "\n" + usage_hint("tr")
+_PRINTABLE_ESCAPES = {
+    "\\": "\\",
+    "\a": "\\a",
+    "\b": "\\b",
+    "\f": "\\f",
+    "\n": "\\n",
+    "\r": "\\r",
+    "\t": "\\t",
+    "\v": "\\v",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,13 +44,36 @@ def parse_flags(flags: Mapping[str, FlagValue]) -> TrFlags:
     )
 
 
+def _printable(view: str) -> str:
+    """A piece of an operand as GNU tr's ``make_printable_str`` spells it.
+
+    Its diagnostics quote this spelling, so a byte outside ASCII shows as
+    an octal escape whose backslash the quoting doubles.
+
+    Args:
+        view (str): the piece as a byte view.
+    """
+    return "".join(
+        _PRINTABLE_ESCAPES.get(ch)
+        or (ch if " " <= ch <= "~" else f"\\{ord(ch):03o}")
+        for ch in view
+    )
+
+
 def _expand_ranges(s: str) -> str:
     result: list[str] = []
     i = 0
     while i < len(s):
         if s.startswith("[:", i) and ":]" in s[i + 2 :]:
             end = s.index(":]", i + 2)
-            result.append(class_characters(s[i + 2 : end]))
+            name = s[i + 2 : end]
+            members = class_characters(name)
+            if members is None:
+                raise ValueError(
+                    "tr: invalid character class "
+                    f"'{quote_word(_printable(name))}'"
+                )
+            result.append(members)
             i = end + 2
         elif i + 2 < len(s) and s[i + 1] == "-":
             start, end = ord(s[i]), ord(s[i + 2])

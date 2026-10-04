@@ -111,6 +111,19 @@ export interface SedScriptPiece {
 }
 
 /**
+ * What a piece of script text is, as GNU's `text_types`. It decides what an
+ * escape spells: a regex and a replacement keep an unknown escape's
+ * backslash for their own reader, and a replacement quotes the `\` or `&` a
+ * numeric escape spells, so it stays a literal byte rather than a
+ * backreference.
+ */
+enum SedText {
+  BUFFER = 'buffer',
+  REPLACEMENT = 'replacement',
+  REGEX = 'regex',
+}
+
+/**
  * A script GNU refuses. `wfiles` are the files the script had opened
  * (and so truncated) before the error, since GNU opens a `w` file the
  * moment it compiles the command. `exitCode` is 1 for a syntax error and
@@ -430,7 +443,7 @@ class Compiler {
       if (icase || multiline) this.bad(BAD_MODIF)
       return null
     }
-    const normalized = this.normalizeText(pattern, true)
+    const normalized = this.normalizeText(pattern, SedText.REGEX)
     let source: string
     let groups: number
     try {
@@ -465,14 +478,13 @@ class Compiler {
     return re
   }
 
-  // GNU's normalize_text: C escapes, `\dNNN`, `\oNNN` and `\xHH` bytes
-  // (one above ASCII carried as its surrogate escape, written back as that
-  // raw byte), `\cX` control characters. In a text buffer (a/i/c and y) a
-  // backslash before any other character is dropped; in a regex it stays
-  // for regcomp, and what an escape produced is read as regex syntax, so
-  // `\x2e` is any character and `\x5c` a trailing backslash.
-  private normalizeText(buf: string, regex = false, replacement = false): string {
-    buf = byteView(buf)
+  // GNU's normalize_text, over the text's byte view: C escapes, `\dNNN`,
+  // `\oNNN` and `\xHH` bytes and `\cX` control characters. In a text buffer
+  // (a/i/c and y) a backslash before any other character is dropped; in a
+  // regex it stays for regcomp, and what an escape produced is read as regex
+  // syntax, so `\x2e` is any character and `\x5c` a trailing backslash.
+  private normalizeText(text: string, kind = SedText.BUFFER): string {
+    const buf = byteView(text)
     let out = ''
     let i = 0
     while (i < buf.length) {
@@ -501,19 +513,20 @@ class Compiler {
           i += 1
         }
         const char = digits === 0 ? nx : String.fromCharCode(value & 0xff)
-        if (replacement && digits !== 0 && (char === '\\' || char === '&')) out += '\\'
+        if (kind === SedText.REPLACEMENT && digits !== 0 && (char === '\\' || char === '&'))
+          out += '\\'
         out += char
         continue
       }
       if (nx === 'c') {
         if (i >= buf.length) {
-          if (regex) out += '\\'
+          if (kind === SedText.REGEX) out += '\\'
           continue
         }
         const x = buf.charAt(i)
         const upper = x >= 'a' && x <= 'z' ? x.toUpperCase() : x
         const char = String.fromCharCode(upper.charCodeAt(0) ^ 0x40)
-        if (replacement && (char === '\\' || char === '&')) out += '\\'
+        if (kind === SedText.REPLACEMENT && (char === '\\' || char === '&')) out += '\\'
         out += char
         i += 1
         if (x === '\\') {
@@ -522,7 +535,7 @@ class Compiler {
         }
         continue
       }
-      out += regex || replacement ? '\\' + nx : nx
+      out += kind === SedText.BUFFER ? nx : '\\' + nx
     }
     return out
   }
@@ -805,7 +818,7 @@ class Compiler {
         if (replacement === null) this.bad(UNTERM_S_CMD)
         const sub: SedSubst = {
           re: null,
-          replacement: this.normalizeText(replacement, false, true),
+          replacement: this.normalizeText(replacement, SedText.REPLACEMENT),
           global: false,
           print: false,
           numb: 0,

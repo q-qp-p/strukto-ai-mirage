@@ -12,11 +12,10 @@
 // limitations under the License.
 // ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
-import { encodeText, fromByteView, textView } from '../../shell/bytes.ts'
+import { fromByteView } from '../../shell/bytes.ts'
 import { GetlineKind, RedirKind } from './nodes.ts'
 
 import {
-  charLength,
   indexOf,
   matchPosition,
   nextRandom,
@@ -342,7 +341,7 @@ export class Interpreter {
           record = await this.main.next()
         } catch (err) {
           if (!(err instanceof AwkIOError)) throw err
-          throw new AwkRuntimeError(`awk: cannot open "${textView(this.mainName)}" (${err.detail})`)
+          throw new AwkRuntimeError(`awk: cannot open "${this.mainName}" (${err.detail})`)
         }
         if (record !== null) {
           this.nr += 1
@@ -711,14 +710,14 @@ export class Interpreter {
 
   private async builtinLength(args: readonly Expr[]): Promise<Value> {
     const target = args[0]
-    if (target === undefined) return num(charLength(this.ensureRecord()))
+    if (target === undefined) return num(this.ensureRecord().length)
     if (target.type === 'Var') {
       const frame = this.frame()
       const known = frame?.params.has(target.name) === true ? frame.tables : this.tables
       const array = known.get(target.name)
       if (array !== undefined) return num(array.size)
     }
-    return num(charLength(toStr(await this.eval(target), this.convfmt())))
+    return num(toStr(await this.eval(target), this.convfmt()).length)
   }
 
   private async builtinSub(node: BuiltinCall, globally: boolean): Promise<Value> {
@@ -817,7 +816,7 @@ export class Interpreter {
       await this.host.writeFile(name, body, append)
     } catch (err) {
       if (!(err instanceof AwkIOError)) throw err
-      throw new AwkRuntimeError(`awk: cannot open "${textView(name)}" for output (${err.detail})`)
+      throw new AwkRuntimeError(`awk: cannot open "${name}" for output (${err.detail})`)
     }
   }
 
@@ -1173,12 +1172,12 @@ export class Interpreter {
    * file that could not be written now.
    */
   async salvage(failure: Error): Promise<[Uint8Array, Uint8Array]> {
-    this.err.push(encodeText(`${failure.message}\n`))
+    this.err.push(fromByteView(`${failure.message}\n`))
     try {
       await this.flushFiles()
     } catch (err) {
       if (!(err instanceof AwkRuntimeError)) throw err
-      this.err.push(encodeText(`${err.message}\n`))
+      this.err.push(fromByteView(`${err.message}\n`))
     }
     this.release()
     return this.take()

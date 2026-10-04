@@ -113,6 +113,16 @@
         "stdout": " c3 a9 ff 0a\n\\303\\251\\377$\n",
         "stderr": ""
       }
+    },
+    {
+      "id": "sed_bytes_script_file",
+      "seq": 14470109,
+      "command": "( export LC_ALL=C; printf 's/\\351/E/\\n' > /data/bytes.sed; printf 'caf\\351\\n' | sed -f /data/bytes.sed | od -An -tx1 )",
+      "expect": {
+        "exit": 0,
+        "stdout": " 63 61 66 45 0a\n",
+        "stderr": ""
+      }
     }
   ]
 }

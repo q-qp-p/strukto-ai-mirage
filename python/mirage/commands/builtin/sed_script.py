@@ -15,6 +15,7 @@
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from enum import Enum
 
 from mirage.commands.builtin.utils.bre import (
     BreError,
@@ -166,6 +167,20 @@ class SedScriptPiece:
     kind: str
     text: str
     name: str = "-"
+
+
+class SedText(Enum):
+    """What a piece of script text is, as GNU's ``text_types``.
+
+    It decides what an escape spells: a regex and a replacement keep an
+    unknown escape's backslash for their own reader, and a replacement
+    quotes the ``\\`` or ``&`` a numeric escape spells, so it stays a
+    literal byte rather than a backreference.
+    """
+
+    BUFFER = "buffer"
+    REPLACEMENT = "replacement"
+    REGEX = "regex"
 
 
 class SedError(ValueError):
@@ -524,7 +539,7 @@ class _Compiler:
             if icase or multiline:
                 raise self._bad(BAD_MODIF)
             return None
-        normalized = self._normalize_text(pattern, regex=True)
+        normalized = self._normalize_text(pattern, SedText.REGEX)
         try:
             if self.extended:
                 # GNU sed clears RE_UNMATCHED_RIGHT_PAREN_ORD, which the
@@ -557,24 +572,22 @@ class _Compiler:
         return regex
 
     def _normalize_text(
-        self, buf: str, regex: bool = False, replacement: bool = False
+        self, text: str, kind: SedText = SedText.BUFFER
     ) -> str:
-        """GNU's normalize_text.
+        """GNU's normalize_text, over the text's byte view.
 
-        C escapes, ``\\dNNN``, ``\\oNNN`` and ``\\xHH`` bytes in a
-        C-locale byte view, ``\\cX`` control characters. In a text buffer (a/i/c and
-        y) a backslash before any other character is dropped; in a regex
-        it stays for regcomp, and what an escape produced is read as regex
+        C escapes, ``\\dNNN``, ``\\oNNN`` and ``\\xHH`` bytes and
+        ``\\cX`` control characters. In a text buffer (a/i/c and y) a
+        backslash before any other character is dropped; in a regex it
+        stays for regcomp, and what an escape produced is read as regex
         syntax, so ``\\x2e`` is any character and ``\\x5c`` a trailing
         backslash.
 
         Args:
-            buf (str): the text as read.
-            regex (bool): whether the text is a regex.
-            replacement (bool): preserve replacement syntax and quote numeric
-                escapes that would otherwise become backreferences.
+            text (str): the text as read.
+            kind (SedText): which part of the script it is.
         """
-        buf = byte_view(buf)
+        buf = byte_view(text)
         out: list[str] = []
         i = 0
         while i < len(buf):
@@ -607,19 +620,19 @@ class _Compiler:
                     i += 1
                     limit *= base
                 char = chr(value & 0xFF) if digits else nx
-                if replacement and digits and char in "\\&":
+                if kind is SedText.REPLACEMENT and digits and char in "\\&":
                     out.append("\\")
                 out.append(char)
                 continue
             if nx == "c":
                 if i >= len(buf):
-                    if regex:
+                    if kind is SedText.REGEX:
                         out.append("\\")
                     continue
                 x = buf[i]
                 upper = x.upper() if "a" <= x <= "z" else x
                 char = chr(ord(upper) ^ 0x40)
-                if replacement and char in "\\&":
+                if kind is SedText.REPLACEMENT and char in "\\&":
                     out.append("\\")
                 out.append(char)
                 i += 1
@@ -628,7 +641,7 @@ class _Compiler:
                         raise self._bad(RECURSIVE_ESCAPE_C)
                     i += 1
                 continue
-            out.append("\\" + nx if regex or replacement else nx)
+            out.append(nx if kind is SedText.BUFFER else "\\" + nx)
         return "".join(out)
 
     def _read_text(self, cmd: SedCommand | None, leadin: str | None) -> None:
@@ -910,7 +923,7 @@ class _Compiler:
             sub = SedSubst(
                 re=None,
                 replacement=self._normalize_text(
-                    replacement, replacement=True
+                    replacement, SedText.REPLACEMENT
                 ),
             )
             icase, multiline = self._mark_subst_opts(sub)

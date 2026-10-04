@@ -83,6 +83,16 @@
         "stdout": " c3 a9 ff 00 0a\n",
         "stderr": ""
       }
+    },
+    {
+      "id": "tr_bytes_invalid_class",
+      "seq": 14470306,
+      "command": "( export LC_ALL=C; tr -d '[:alphé:]' < /dev/null; echo rc=$?; tr -d $'[:x\\xff:]' < /dev/null; echo rc=$? )",
+      "expect": {
+        "exit": 0,
+        "stdout": "rc=1\nrc=1\n",
+        "stderr": "tr: invalid character class 'alph\\\\303\\\\251'\ntr: invalid character class 'x\\\\377'\n"
+      }
     }
   ]
 }

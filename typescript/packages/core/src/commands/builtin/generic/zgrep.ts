@@ -34,7 +34,7 @@ import { linkDoor } from '../utils/links.ts'
 import { operandLabel } from '../utils/stream.ts'
 import type { StatFn } from './archive/walk.ts'
 import { decompressInputs } from './decompress.ts'
-import { lineOffsets, prefixOf } from '../grep_offsets.ts'
+import { prefixOf } from '../grep_offsets.ts'
 import { formatRecords } from '../utils/output.ts'
 import { splitLines } from '../utils/lines.ts'
 
@@ -56,7 +56,8 @@ interface ZgrepOpts {
   onlyMatching: boolean
   maxCount: number | null
   // -b: the byte offset of each line's start or, under -o, of the match
-  // itself, in the field order GNU grep prints (name, line, byte).
+  // itself, in the field order GNU grep prints (name, line, byte). A line
+  // is matched as its byte view, so its length is already its byte count.
   byteOffsets: boolean
 }
 
@@ -66,8 +67,6 @@ function zgrepSearch(
   opts: ZgrepOpts,
   filename: string | null,
 ): [string[], boolean] {
-  const lines = splitLines(byteView(data))
-  const offsets = opts.byteOffsets ? lineOffsets(lines.map(textView)) : []
   const reGlobal = opts.onlyMatching
     ? compilePosixRegex(
         pattern.source,
@@ -75,9 +74,8 @@ function zgrepSearch(
       )
     : null
   const matched: [number, number, string][] = []
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? ''
-    const start = opts.byteOffsets ? (offsets[i] ?? 0) : 0
+  let start = 0
+  for (const [i, line] of splitLines(byteView(data)).entries()) {
     if (opts.onlyMatching && !opts.invert && reGlobal !== null) {
       reGlobal.lastIndex = 0
       let m: RegExpExecArray | null
@@ -98,6 +96,7 @@ function zgrepSearch(
       if (hit) matched.push([i + 1, start, line])
     }
     if (opts.maxCount !== null && matched.length >= opts.maxCount) break
+    start += line.length + 1
   }
   if (opts.count) {
     const value =

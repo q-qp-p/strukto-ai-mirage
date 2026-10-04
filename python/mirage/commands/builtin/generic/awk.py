@@ -374,7 +374,7 @@ async def awk(
     try:
         program = parse(source)
     except AwkSyntaxError as exc:
-        raise UsageError(str(exc)) from exc
+        return None, IOResult(exit_code=2, stderr=from_byte_view(f"{exc}\n"))
 
     # An empty operand names no file and mawk skips it, as it does an
     # operand ARGV no longer holds; a `var=value` operand is assigned

@@ -965,8 +965,7 @@
         "exit": 0,
         "stdout": " 6e 65 65 64 6c 65 ff 74 61 69 6c 0a 6e 65 65 64\n 6c 65 20 6e 65 78 74 0a 72 63 3d 30 0a\n",
         "stderr": ""
-      },
-      "note": "GNU grep 3.11 with -A and a selected malformed UTF-8 line emits unrelated preceding text and a group separator. Mirage retains only requested context and suppresses the malformed line."
+      }
     },
     {
       "id": "grep_binary_stdin_forms",

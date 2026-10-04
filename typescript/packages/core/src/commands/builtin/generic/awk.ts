@@ -34,7 +34,6 @@ import {
   type AwkHost,
   type CommandRun,
 } from '../../../core/awk/index.ts'
-import { UsageError } from '../../errors.ts'
 import { USAGE, type AwkFlags } from './awk_types.ts'
 import { dispatchStat, typedSpec } from '../utils/paths.ts'
 import {
@@ -298,8 +297,8 @@ export async function awkGeneric(
   try {
     parsed = parse(program)
   } catch (err) {
-    if (err instanceof AwkSyntaxError) throw new UsageError(err.message)
-    throw err
+    if (!(err instanceof AwkSyntaxError)) throw err
+    return [null, new IOResult({ exitCode: 2, stderr: fromByteView(`${err.message}\n`) })]
   }
   // An empty operand names no file and mawk skips it, as it does an
   // operand ARGV no longer holds; a `var=value` operand is assigned when

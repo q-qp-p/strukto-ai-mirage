@@ -62,7 +62,7 @@ from mirage.core.awk.nodes import (
     While,
 )
 from mirage.core.awk.regex import compile_ere
-from mirage.shell.bytes import byte_view, text_view
+from mirage.shell.bytes import byte_view
 
 P_ASSIGN = 1
 P_TERNARY = 2
@@ -123,11 +123,7 @@ class Parser:
             message (str): human readable reason.
         """
         tok = self.peek()
-        near = (
-            text_view(tok.text)
-            if tok.kind is not TokKind.EOF
-            else "end of program"
-        )
+        near = tok.text if tok.kind is not TokKind.EOF else "end of program"
         return AwkSyntaxError(f"awk: syntax error at '{near}': {message}")
 
     def at_op(self, *texts: str) -> bool:

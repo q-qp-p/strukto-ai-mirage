@@ -5,7 +5,6 @@ from unittest.mock import patch
 
 import pytest
 
-from mirage.commands.builtin import grep_offsets
 from mirage.commands.builtin.generic.grep import parse_flags
 from mirage.commands.builtin.grep_binary import PROBE_BLOCK_BYTES, grep_input
 from mirage.commands.errors import UsageError
@@ -646,27 +645,16 @@ def test_byte_offset_reaches_the_generic_from_either_spelling(argv, expected):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("byte_offsets", [False, True])
-async def test_only_matching_encodes_at_most_one_prefix_pass(
-    monkeypatch, byte_offsets
+async def test_only_matching_offsets_count_bytes_along_one_long_line(
+    byte_offsets,
 ):
     count = 8000
     row = "é😀" + "x" * 100 + "needle"
-    line = row * count
-    data = line.encode()
-    encoded = 0
-    calls = 0
-    original = grep_offsets.byte_offset
-
-    def measured(text, index):
-        nonlocal encoded, calls
-        encoded += len(text)
-        calls += 1
-        return original(text, index)
+    data = (row * count).encode()
 
     async def source():
         yield data
 
-    monkeypatch.setattr(grep_offsets, "byte_offset", measured)
     flags = parse_flags(
         FlagView({"o": True, "byte_offset": byte_offsets}, spec=SPECS["grep"]),
         False,
@@ -684,8 +672,6 @@ async def test_only_matching_encodes_at_most_one_prefix_pass(
     )
     assert out == expected.encode()
     assert io.exit_code == 0
-    assert calls <= (count if byte_offsets else 0)
-    assert encoded <= len(line)
 
 
 @pytest.mark.asyncio

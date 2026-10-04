@@ -67,11 +67,19 @@ def decode_text(data: bytes) -> str:
 
 
 def byte_view(value: str | bytes) -> str:
-    """Represent each byte as one character for C-locale text commands.
+    """The same bytes as a string of one character per byte.
+
+    A command that runs in GNU's C locale (grep, sed, awk, tr, expr)
+    counts, matches and indexes bytes, not characters: `.` matches one
+    byte, `length` counts bytes, and a match may end inside a character.
+    All of that follows from running on this representation and
+    converting only at the command's edges, where a typed `é`, its
+    `$'\\xc3\\xa9'` spelling and the file's own bytes all arrive as the
+    same two characters.
 
     Args:
-        value (str | bytes): shell text (including escaped bytes), or input
-            bytes. Literal UTF-8 and byte escapes acquire the same view.
+        value (str | bytes): shell text, a raw byte riding as its
+            surrogate escape, or bytes as read.
     """
     return (encode_text(value) if isinstance(value, str) else value).decode(
         "latin-1"
@@ -79,18 +87,21 @@ def byte_view(value: str | bytes) -> str:
 
 
 def from_byte_view(view: str) -> bytes:
-    """Recover bytes without replacing invalid UTF-8 or partial characters.
+    """The bytes a byte view stands for, the inverse of ``byte_view``.
+
+    An invalid sequence or half a character comes back as itself, which
+    is what GNU writes.
 
     Args:
-        view (str): text whose characters each represent one byte.
+        view (str): one character per byte, every code point below 256.
     """
     return view.encode("latin-1")
 
 
 def text_view(view: str) -> str:
-    """Return byte-view paths and shell programs to workspace text.
+    """A byte view as shell text again, for a path or a nested command line.
 
     Args:
-        view (str): byte-oriented text crossing back into the workspace.
+        view (str): one character per byte, every code point below 256.
     """
     return decode_text(from_byte_view(view))

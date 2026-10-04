@@ -4,10 +4,7 @@ from dataclasses import dataclass
 from functools import partial
 
 from mirage.commands.builtin.generic.decompress import decompress_inputs
-from mirage.commands.builtin.grep_offsets import (
-    line_offsets,
-    prefix_of,
-)
+from mirage.commands.builtin.grep_offsets import prefix_of
 from mirage.commands.builtin.grep_pattern import (
     NEVER_MATCH,
     compile_pattern,
@@ -61,17 +58,12 @@ def _zgrep_search(
         max_count (int | None): -m.
         byte_offsets (bool): -b, the byte offset of each line's start
             or, under -o, of the match itself, in the field order GNU
-            grep prints (name, line, byte).
+            grep prints (name, line, byte). A line is matched as its
+            byte view, so its length is already its byte count.
     """
-    lines = split_lines(byte_view(data))
-    offsets = (
-        line_offsets([text_view(line) for line in lines])
-        if byte_offsets
-        else []
-    )
     matched: list[tuple[int, int, str]] = []
-    for idx, line in enumerate(lines, 1):
-        start = offsets[idx - 1] if byte_offsets else 0
+    start = 0
+    for idx, line in enumerate(split_lines(byte_view(data)), 1):
         if only_matching and not invert:
             hits = list(pattern.finditer(line))
             if hits:
@@ -93,6 +85,7 @@ def _zgrep_search(
                 matched.append((idx, start, line))
         if max_count is not None and len(matched) >= max_count:
             break
+        start += len(line) + 1
     if count:
         value = str(len(matched))
         if filename:
