@@ -28,7 +28,6 @@ from mirage.server.ssh.constants import PROFILE_OPTION
 from mirage.server.ssh.stream import (
     ChannelInput,
     ChannelOutput,
-    LoopStdin,
     Mark,
     Send,
     decode,
@@ -36,6 +35,7 @@ from mirage.server.ssh.stream import (
     encode,
     loop_sender,
 )
+from mirage.server.stdin import LoopStdin
 from mirage.workspace.abort import MirageAbortError
 from mirage.workspace.executor.statement import record_status
 
@@ -234,10 +234,7 @@ class ShellChannel:
         self._entry = entry
         self._session_id = session_id
         self._process = process
-        # asyncssh's line editor, which echoes and turns Ctrl-C into a
-        # break, starts only for a pty with a terminal type, so a pty
-        # without one is served as the plain stream it effectively is.
-        self._tty = bool(process.term_type)
+        self._tty = process.term_type is not None
         self._input = ChannelInput(process)
         self._output = ChannelOutput(process, self._tty)
         self._running: concurrent.futures.Future[int] | None = None

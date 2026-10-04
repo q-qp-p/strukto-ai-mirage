@@ -267,7 +267,10 @@ class MirageToolOperations:
 
         Each option is the GNU grep flag of the same name, and the line
         runs in the session's shell, so the search is the shell's own:
-        the same policy, push-down and history as typing it.
+        the same policy, push-down and history as typing it. grep exits
+        1 when nothing matched, an empty answer rather than a failure,
+        so only an exit above 1 (a bad regex, an unreadable path) is a
+        tool error.
 
         Args:
             pattern (str): The regex to search for.
@@ -300,10 +303,6 @@ class MirageToolOperations:
             words.append(shlex.quote(f"--include={include}"))
         words += ["-e", shlex.quote(pattern), shlex.quote(path)]
         io = await self._ws.shell(" ".join(words), session_id=self._session_id)
-        # grep exits 1 for "no match", which is a normal empty answer,
-        # and >1 for a real failure (bad regex, unreadable path). Only
-        # the second is a tool error; reporting the first as one would
-        # tell the agent its search broke every time nothing matched.
         return ToolResult(io_to_str(io), io.exit_code > 1)
 
     async def glob(self, pattern: str, path: str = "/") -> ToolResult:

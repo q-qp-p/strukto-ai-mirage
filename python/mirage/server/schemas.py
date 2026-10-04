@@ -79,19 +79,19 @@ class CloneWorkspaceRequest(BaseModel):
 class SnapshotWorkspaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    path: str
+    key: str
 
 
 class SnapshotWorkspaceResponse(BaseModel):
     id: str
-    path: str
+    key: str
     size: int
 
 
 class LoadWorkspaceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    path: str
+    key: str | None = None
     id: str | None = None
     override: dict[str, Any] | None = None
 
@@ -99,56 +99,3 @@ class LoadWorkspaceRequest(BaseModel):
 class DeleteWorkspaceResponse(BaseModel):
     id: str
     closed_at: float
-
-
-class CommitRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    branch: str = "main"
-    message: str = ""
-
-
-class CommitResponse(BaseModel):
-    version: str
-    branch: str
-
-
-class VersionLogItem(BaseModel):
-    id: str
-    message: str
-
-
-class CheckoutRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    ref: str
-
-
-class CloneRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source_id: str
-    at: str | None = None
-    id: str | None = None
-    # A version store holds no `secrets:` block, and the live source
-    # may be gone (a restart), so a historical clone that restores
-    # managed pointers names their declarations here.
-    secrets: dict[str, Any] | None = None
-
-
-class DiffResponse(BaseModel):
-    added: list[str]
-    modified: list[str]
-    deleted: list[str]
-
-
-class BranchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    from_branch: str = "main"
-
-
-class BranchResponse(BaseModel):
-    branch: str
-    version: str

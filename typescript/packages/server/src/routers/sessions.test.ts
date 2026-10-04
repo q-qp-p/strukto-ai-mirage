@@ -30,12 +30,12 @@ describe('sessions router', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/v1/workspaces/sw/sessions',
-      payload: { sessionId: 'agent_a' },
+      payload: { session_id: 'agent_a' },
     })
     expect(created.statusCode).toBe(201)
     const list = await app.inject({ method: 'GET', url: '/v1/workspaces/sw/sessions' })
-    const sessions = list.json<{ sessionId: string; cwd: string }[]>()
-    expect(sessions.some((s) => s.sessionId === 'agent_a')).toBe(true)
+    const sessions = list.json<{ session_id: string; cwd: string }[]>()
+    expect(sessions.some((s) => s.session_id === 'agent_a')).toBe(true)
     const del = await app.inject({
       method: 'DELETE',
       url: '/v1/workspaces/sw/sessions/agent_a',
@@ -54,25 +54,25 @@ describe('sessions router', () => {
     const created = await app.inject({
       method: 'POST',
       url: '/v1/workspaces/grants-ws/sessions',
-      payload: { sessionId: 'agent_r', mounts: { '/': 'read' } },
+      payload: { session_id: 'agent_r', mounts: { '/': 'read' } },
     })
     expect(created.statusCode).toBe(201)
     const listForm = await app.inject({
       method: 'POST',
       url: '/v1/workspaces/grants-ws/sessions',
-      payload: { sessionId: 'agent_l', mounts: ['/'] },
+      payload: { session_id: 'agent_l', mounts: ['/'] },
     })
     expect(listForm.statusCode).toBe(422)
     const bad = await app.inject({
       method: 'POST',
       url: '/v1/workspaces/grants-ws/sessions',
-      payload: { sessionId: 'agent_x', mounts: { '/': 'admin' } },
+      payload: { session_id: 'agent_x', mounts: { '/': 'admin' } },
     })
     expect(bad.statusCode).toBe(422)
     const unknownRole = await app.inject({
       method: 'POST',
       url: '/v1/workspaces/grants-ws/sessions',
-      payload: { sessionId: 'agent_p', profile: 'nope' },
+      payload: { session_id: 'agent_p', profile: 'nope' },
     })
     expect(unknownRole.statusCode).toBe(422)
     await app.close()
@@ -84,12 +84,12 @@ describe('sessions router', () => {
     await app.inject({
       method: 'POST',
       url: '/v1/workspaces/dup-ws/sessions',
-      payload: { sessionId: 'dup' },
+      payload: { session_id: 'dup' },
     })
     const res = await app.inject({
       method: 'POST',
       url: '/v1/workspaces/dup-ws/sessions',
-      payload: { sessionId: 'dup' },
+      payload: { session_id: 'dup' },
     })
     expect(res.statusCode).toBe(409)
     await app.close()

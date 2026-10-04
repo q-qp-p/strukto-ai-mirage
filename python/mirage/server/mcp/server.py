@@ -110,7 +110,8 @@ class MirageMcpServer:
     """Serves one workspace's tools over the MCP protocol.
 
     The handlers are bound methods handed to the SDK's constructor, so
-    the tool table stays readable and nothing nests.
+    the tool table stays readable and nothing nests. The server runs
+    with no lifespan, so its context is the default one's empty dict.
 
     Args:
         workspace (Workspace): The workspace to serve.
@@ -142,8 +143,6 @@ class MirageMcpServer:
                 workspace, stale_write_protection, session_id
             )
         )
-        # The SDK's parameter is the lifespan result. No lifespan is
-        # passed, so the default one runs and yields an empty dict.
         self.server: Server[dict[str, Any]] = Server(
             name,
             version=version,

@@ -239,29 +239,29 @@ export class JobTable {
 }
 
 export interface JobBriefDict {
-  jobId: string
-  workspaceId: string
-  sessionId: string
+  job_id: string
+  workspace_id: string
+  session_id: string
   command: string
   status: JobStatus
   revision: number
-  cancelRequested: boolean
-  submittedAt: number
-  startedAt: number | null
-  finishedAt: number | null
+  cancel_requested: boolean
+  submitted_at: number
+  started_at: number | null
+  finished_at: number | null
 }
 
 export function toBriefDict(entry: JobEntry): JobBriefDict {
   return {
-    jobId: entry.id,
-    workspaceId: entry.workspaceId,
-    sessionId: entry.sessionId,
+    job_id: entry.id,
+    workspace_id: entry.workspaceId,
+    session_id: entry.sessionId,
     command: entry.command,
     status: entry.status,
     revision: entry.revision,
-    cancelRequested: entry.cancelRequested,
-    submittedAt: entry.submittedAt,
-    startedAt: entry.startedAt,
-    finishedAt: entry.finishedAt,
+    cancel_requested: entry.cancelRequested,
+    submitted_at: entry.submittedAt,
+    started_at: entry.startedAt,
+    finished_at: entry.finishedAt,
   }
 }

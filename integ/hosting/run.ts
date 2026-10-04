@@ -110,9 +110,7 @@ async function run(
           ? undefined
           : Object.fromEntries(
               Object.entries(body).map(([key, value]) => [
-                host === 'python'
-                  ? key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`)
-                  : key,
+                key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
                 value,
               ]),
             )
@@ -300,8 +298,19 @@ async function run(
         }
       }
     }
-    await request('POST', '/v1/workspaces/a/snapshot', { path: 'nested/state.tar' })
-    await request('POST', '/v1/workspaces/load', { path: 'nested/state.tar', id: 'loaded' }, 201)
+    const tar = await fetch(`${url}/v1/workspaces/a/snapshot`, {
+      signal: AbortSignal.timeout(10_000),
+    })
+    assert.equal(tar.status, 200, 'GET /v1/workspaces/a/snapshot')
+    const upload = new FormData()
+    upload.append('request', new Blob([JSON.stringify({ id: 'loaded' })]))
+    upload.append('snapshot', new Blob([await tar.arrayBuffer()]))
+    const loaded = await fetch(`${url}/v1/workspaces/load`, {
+      method: 'POST',
+      body: upload,
+      signal: AbortSignal.timeout(10_000),
+    })
+    assert.equal(loaded.status, 201, `POST /v1/workspaces/load: ${await loaded.text()}`)
     assert.equal(
       (
         await request<Result>('POST', '/v1/workspaces/loaded/shell', {

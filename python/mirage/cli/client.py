@@ -22,7 +22,11 @@ from urllib.parse import urlparse
 import httpx
 
 from mirage.cli.env import ENV_AUTH_MODE, ENV_AUTH_TOKEN
-from mirage.cli.settings import DaemonSettings, load_daemon_settings
+from mirage.cli.settings import (
+    DaemonSettings,
+    is_local_url,
+    load_daemon_settings,
+)
 from mirage.server.auth import AuthMode
 from mirage.server.auth import storage as auth_storage
 from mirage.server.daemon_config import (
@@ -42,7 +46,7 @@ class DaemonClient:
 
     Constructs once per CLI invocation and is reused across calls.
     Handles auth header injection, daemon auto-spawn on first
-    ``workspace --create``, and discovery via the settings chain.
+    ``workspace create``, and discovery via the settings chain.
     """
 
     def __init__(self, settings: DaemonSettings) -> None:
@@ -81,8 +85,9 @@ class DaemonClient:
         Args:
             startup_timeout (float): seconds to wait for the spawned
                 daemon to answer ``/v1/health``.
-            allow_spawn (bool): if True and the daemon is unreachable,
-                fork-execs ``uvicorn mirage.server.app:app`` detached.
+            allow_spawn (bool): if True and the daemon is unreachable
+                at a local URL, starts ``mirage.server.daemon:app``
+                detached. A remote URL never starts one.
 
         Raises:
             DaemonUnreachable: daemon is not reachable and either
@@ -91,10 +96,14 @@ class DaemonClient:
         """
         if self.is_reachable():
             return
+        if not is_local_url(self.settings.url):
+            raise DaemonUnreachable(
+                f"daemon not reachable at {self.settings.url}"
+            )
         if not allow_spawn:
             raise DaemonUnreachable(
                 f"daemon not reachable at {self.settings.url}; "
-                "run `mirage workspace --create CONFIG.yaml` to spawn one"
+                "run `mirage workspace create CONFIG.yaml` to spawn one"
             )
         self._spawn_daemon()
         deadline = time.monotonic() + startup_timeout

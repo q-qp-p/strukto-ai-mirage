@@ -56,7 +56,7 @@ async function hasSession(
   const rows: unknown = await r.json()
   return (
     Array.isArray(rows) &&
-    rows.some((row) => (row as { sessionId?: unknown }).sessionId === sessionId)
+    rows.some((row) => (row as { session_id?: unknown }).session_id === sessionId)
   )
 }
 
@@ -84,6 +84,23 @@ async function runMcp(config: string | undefined, options: McpCommandOptions): P
       fail(error instanceof Error ? error.message : String(error), 2)
     }
   }
+  const { relayStdio } = await import('@struktoai/mirage-server/mcp')
+  await relayWorkspace(path, options.workspace, options.session, 'mcp', relayStdio)
+}
+
+/**
+ * Relay this process's stdio to one of a workspace's endpoints. The
+ * workspace is created from `path`, or `workspace` names one the daemon
+ * holds; a created workspace with no `workspace_id` in its config is
+ * deleted when the relay ends. A named session must exist.
+ */
+export async function relayWorkspace(
+  path: string | undefined,
+  workspace: string | undefined,
+  session: string | undefined,
+  endpoint: 'mcp' | 'rpc',
+  relay: (url: string, headers: Record<string, string>) => Promise<void>,
+): Promise<void> {
   const client = makeClient(loadDaemonSettings())
   try {
     await client.ensureRunning({ allowSpawn: true })
@@ -100,19 +117,16 @@ async function runMcp(config: string | undefined, options: McpCommandOptions): P
     workspaceId = (created as { id: string }).id
     minted = typeof loaded.workspace_id !== 'string' || loaded.workspace_id === ''
   } else {
-    workspaceId = options.workspace ?? ''
+    workspaceId = workspace ?? ''
     await handleResponse(
       await client.request('GET', `/v1/workspaces/${encodeURIComponent(workspaceId)}`),
     )
   }
   const workspacePath = `/v1/workspaces/${encodeURIComponent(workspaceId)}`
-  const query =
-    options.session === undefined ? '' : `?sessionId=${encodeURIComponent(options.session)}`
-  const url = `${client.settings.url}${workspacePath}/mcp${query}`
+  const query = session === undefined ? '' : `?session_id=${encodeURIComponent(session)}`
+  const url = `${client.settings.url}${workspacePath}/${endpoint}${query}`
   const token = client.settings.authToken
   const headers: Record<string, string> = token === '' ? {} : { Authorization: `Bearer ${token}` }
-  const { relayStdio } = await import('@struktoai/mirage-server/mcp')
-  const session = options.session
   let refusal: string | undefined
   try {
     if (session !== undefined) {
@@ -121,7 +135,7 @@ async function runMcp(config: string | undefined, options: McpCommandOptions): P
         (error: unknown) => (error instanceof Error ? error.message : String(error)),
       )
     }
-    if (refusal === undefined) await relayStdio(url, headers)
+    if (refusal === undefined) await relay(url, headers)
   } finally {
     if (minted) await client.request('DELETE', workspacePath)
   }

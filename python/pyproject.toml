@@ -465,8 +465,6 @@ module = [
     "mirage.server.routers.sessions",
     "mirage.server.routers.shell",
     "mirage.server.summary",
-    "mirage.server.version.api",
-    "mirage.server.version.state_tree",
     "mirage.shell.arith",
     "mirage.shell.parse",
     "mirage.workspace.dispatcher.dispatcher",

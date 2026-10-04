@@ -21,10 +21,9 @@ import { VERSION } from '@struktoai/mirage-core/version'
  * Answers MCP over one stream by asking the daemon's HTTP endpoint.
  *
  * Every way into mirage's MCP tools ends at the daemon's
- * `/v1/workspaces/:workspaceId/mcp`: the stdio CLI and the SSH subsystem
- * only carry messages to it, so auth, sessions, jobs and history are
- * decided in one place. The endpoint's protocol errors come back as this
- * server's.
+ * `/v1/workspaces/:workspaceId/mcp`: the stdio CLI only carries messages
+ * to it, so auth, sessions, jobs and history are decided in one place. The endpoint's protocol errors come back as this
+ * server's, and a client's cancel goes on to the endpoint.
  */
 export class McpRelay {
   readonly server: McpServer
@@ -34,7 +33,9 @@ export class McpRelay {
     const inner = this.server.server
     inner.registerCapabilities({ tools: {} })
     inner.setRequestHandler('tools/list', (request) => this.upstream.listTools(request.params))
-    inner.setRequestHandler('tools/call', (request) => this.upstream.callTool(request.params))
+    inner.setRequestHandler('tools/call', (request, ctx) =>
+      this.upstream.callTool(request.params, { signal: ctx.mcpReq.signal }),
+    )
   }
 }
 

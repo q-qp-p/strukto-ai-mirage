@@ -21,6 +21,8 @@ import { ioToStr } from '@struktoai/mirage-agents/io_text'
 import { MirageToolOperations, type ToolResult } from '@struktoai/mirage-agents/tool_operations'
 import type { SessionState } from '@struktoai/mirage-core/workspace/session/session'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import type { JsonValue } from '@struktoai/mirage-core/types'
+import { InFlight, rpcMessages } from '../inflight.ts'
 import { ioResultToDict } from '../io_serde.ts'
 import { JobStatus, type JobTable } from '../jobs.ts'
 import type { WorkspaceEntry, WorkspaceRegistry } from '../registry.ts'
@@ -32,7 +34,8 @@ const MCP_PATH = '/v1/workspaces/:workspaceId/mcp'
  *
  * `shell` is a job, submitted to the daemon's job table the way
  * `POST /shell` submits one, so an MCP command is listed by `/v1/jobs`,
- * can be cancelled there, and is recorded like any other.
+ * can be cancelled there, and is recorded like any other. The caller's
+ * `signal` (an MCP client's cancel) cancels the job too.
  */
 export class DaemonToolOperations extends MirageToolOperations {
   constructor(
@@ -43,7 +46,7 @@ export class DaemonToolOperations extends MirageToolOperations {
     super(entry.runner.ws, { sessionId: session })
   }
 
-  override async shell(command: string): Promise<ToolResult> {
+  override async shell(command: string, signal?: AbortSignal): Promise<ToolResult> {
     const ws = this.entry.runner.ws
     let answer: ToolResult | undefined
     let job = await this.jobs.submit(
@@ -58,7 +61,15 @@ export class DaemonToolOperations extends MirageToolOperations {
       },
       this.session,
     )
-    job = await this.jobs.wait(job.id)
+    const jobId = job.id
+    const cancel = (): void => void this.jobs.cancel(jobId)
+    signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted === true) cancel()
+    try {
+      job = await this.jobs.wait(jobId)
+    } finally {
+      signal?.removeEventListener('abort', cancel)
+    }
     if (job.status === JobStatus.CANCELED) {
       return { content: [{ type: 'text', text: 'job canceled' }], isError: true }
     }
@@ -73,12 +84,10 @@ export class DaemonToolOperations extends MirageToolOperations {
  * Serves every workspace's tools over MCP's streamable HTTP.
  *
  * The endpoint is stateless: each request runs in the workspace's default
- * session, or the one `?sessionId=` names, as `/shell` picks its
+ * session, or the one `?session_id=` names, as `/shell` picks its
  * session. One tool table per workspace and live session outlives the requests,
  * so the read one request stamps guards the edit the next one makes; the
- * SDK builds a server per request around it. `fetch` answers a web
- * request with no auth in front, for a door that already admitted its
- * caller: the SSH relay.
+ * SDK builds a server per request around it.
  */
 export class McpDoor {
   private readonly served = new Map<
@@ -91,15 +100,71 @@ export class McpDoor {
     }
   >()
 
+  /** Tool calls still running, so a client's cancel reaches them. */
+  readonly inflight = new InFlight()
+
   constructor(
     private readonly registry: WorkspaceRegistry,
     private readonly jobs: JobTable,
   ) {}
 
-  async fetch(request: Request, parsedBody?: unknown): Promise<Response> {
-    const handler = await this.target(new URL(request.url))
-    if (typeof handler === 'string') return Response.json({ detail: handler }, { status: 404 })
-    return handler.fetch(request, parsedBody === undefined ? {} : { parsedBody })
+  private async fetch(request: Request, parsedBody?: unknown): Promise<Response> {
+    const target = await this.target(new URL(request.url))
+    if (typeof target === 'string') return Response.json({ detail: target }, { status: 404 })
+    const { handler, workspaceId, sessionId } = target
+    const options = parsedBody === undefined ? {} : { parsedBody }
+    const calls: string[] = []
+    for (const message of rpcMessages(parsedBody)) {
+      const params = message.params as { requestId?: JsonValue } | undefined
+      if (message.method === 'notifications/cancelled') {
+        this.inflight.cancel(InFlight.key(workspaceId, sessionId, params?.requestId))
+      } else if (message.method === 'tools/call' && 'id' in message) {
+        calls.push(InFlight.key(workspaceId, sessionId, message.id as JsonValue))
+      }
+    }
+    if (calls.length === 0) return handler.fetch(request, options)
+    const stop = new AbortController()
+    const abort = (): void => {
+      stop.abort()
+    }
+    for (const call of calls) this.inflight.add(call, abort)
+    const settle = (): void => {
+      for (const call of calls) this.inflight.discard(call, abort)
+    }
+    const signal = AbortSignal.any([request.signal, stop.signal])
+    let response: Response
+    try {
+      response = await handler.fetch(new Request(request, { signal }), options)
+    } catch (error) {
+      settle()
+      throw error
+    }
+    if (response.body === null) {
+      settle()
+      return response
+    }
+    const reader: ReadableStreamDefaultReader<Uint8Array> = response.body.getReader()
+    const body = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        try {
+          const next = await reader.read()
+          if (next.done) {
+            settle()
+            controller.close()
+          } else {
+            controller.enqueue(next.value)
+          }
+        } catch (error) {
+          settle()
+          throw error
+        }
+      },
+      cancel(reason: unknown) {
+        settle()
+        return reader.cancel(reason)
+      },
+    })
+    return new Response(body, response)
   }
 
   async handle(req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
@@ -108,9 +173,14 @@ export class McpDoor {
       if (value === undefined) continue
       headers.set(name, Array.isArray(value) ? value.join(', ') : value)
     }
+    const gone = new AbortController()
+    reply.raw.once('close', () => {
+      if (!reply.raw.writableFinished) gone.abort()
+    })
     const request = new Request(`http://${req.headers.host ?? 'localhost'}${req.url}`, {
       method: req.method,
       headers,
+      signal: gone.signal,
     })
     return reply.send(await this.fetch(request, req.body))
   }
@@ -126,9 +196,9 @@ export class McpDoor {
    * The tool table a workspace session is served by, or why there is
    * none: the workspace or the session does not exist. One table per
    * workspace and live session, shared by every door that serves the
-   * tools (this endpoint, the HTTP tool routes, the CLI and SSH through
-   * them), so a read through one door stamps the file for an edit
-   * through another. No session is the workspace's default.
+   * tools (this endpoint, the HTTP tool routes, the RPC endpoint and the
+   * CLI through them), so a read through one door stamps the file for an
+   * edit through another. No session is the workspace's default.
    */
   async tools(
     workspaceId: string,
@@ -142,14 +212,15 @@ export class McpDoor {
    * The handler a request's URL is for, or why there is none: the
    * workspace or the session does not exist.
    */
-  private async target(url: URL): Promise<McpHttpHandler | string> {
+  private async target(
+    url: URL,
+  ): Promise<{ handler: McpHttpHandler; workspaceId: string; sessionId: string } | string> {
     const match = /^\/v1\/workspaces\/([^/]+)\/mcp$/.exec(url.pathname)
     if (match === null) return 'not found'
-    const served = await this.servedFor(
-      decodeURIComponent(match[1] ?? ''),
-      url.searchParams.get('sessionId') ?? '',
-    )
-    return typeof served === 'string' ? served : served.handler
+    const workspaceId = decodeURIComponent(match[1] ?? '')
+    const served = await this.servedFor(workspaceId, url.searchParams.get('session_id') ?? '')
+    if (typeof served === 'string') return served
+    return { handler: served.handler, workspaceId, sessionId: served.session.sessionId }
   }
 
   private async servedFor(

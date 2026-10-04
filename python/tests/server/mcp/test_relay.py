@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from mcp import Client
 from mcp.shared.exceptions import MCPError
@@ -38,3 +40,17 @@ async def test_relays_a_protocol_error():
                 await client.call_tool("nope", {})
     assert caught.value.error.code == -32602
     assert caught.value.error.message == "Tool nope not found"
+
+
+@pytest.mark.asyncio
+async def test_passes_a_cancel_on_so_the_next_line_runs_at_once():
+    async with Client(upstream_server().server) as upstream:
+        async with Client(McpRelay(upstream).server) as client:
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(
+                    client.call_tool("shell", {"command": "sleep 20"}), 0.3
+                )
+            result = await asyncio.wait_for(
+                client.call_tool("shell", {"command": "echo after"}), 5
+            )
+    assert result.content[0].text == "after\n"

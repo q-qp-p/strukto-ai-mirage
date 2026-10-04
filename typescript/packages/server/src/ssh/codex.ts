@@ -23,6 +23,14 @@ import { errnoError } from '@struktoai/mirage-node/fuse/errors'
 import type { ServerChannel } from 'ssh2'
 import type { WorkspaceEntry, WorkspaceRegistry } from '../registry.ts'
 import {
+  RPC_INTERNAL_ERROR,
+  RPC_INVALID_PARAMS,
+  RPC_INVALID_REQUEST,
+  RPC_METHOD_NOT_FOUND,
+  RPC_NOT_FOUND,
+  RPC_PARSE_ERROR,
+} from '../rpc/constants.ts'
+import {
   CODEX_AGENT_ID,
   CODEX_CTRL_C,
   CODEX_CTRL_D,
@@ -35,12 +43,6 @@ import {
   CODEX_SHELL_NAME,
   CODEX_SHELL_PATH,
   CODEX_TERMINATED,
-  RPC_INTERNAL_ERROR,
-  RPC_INVALID_PARAMS,
-  RPC_INVALID_REQUEST,
-  RPC_METHOD_NOT_FOUND,
-  RPC_NOT_FOUND,
-  RPC_PARSE_ERROR,
 } from './constants.ts'
 import { CodexRPCError } from './errors.ts'
 import { keyProfile, loginEnv, newSessionId, openSession, type ChannelRequest } from './session.ts'

@@ -31,7 +31,7 @@ interface WsSessionParams {
 }
 
 interface CreateSessionBody {
-  sessionId?: string
+  session_id?: string
   /**
    * Optional per-mount modes for this session: a mapping of prefix to
    * mode ('read', 'write', 'exec', or the filesystem aliases), never a
@@ -54,7 +54,7 @@ export function registerSessionsRoutes(app: FastifyInstance, deps: SessionsRoute
       if (!deps.registry.has(wsId)) {
         return reply.status(404).send({ detail: 'workspace not found' })
       }
-      const sid = req.body.sessionId ?? `sess_${randomBytes(6).toString('hex')}`
+      const sid = req.body.session_id ?? `sess_${randomBytes(6).toString('hex')}`
       const ws = deps.registry.get(wsId).runner.ws
       await ws.ensureSessionsLoaded()
       if (ws.listSessions().some((s) => s.sessionId === sid)) {
@@ -72,7 +72,7 @@ export function registerSessionsRoutes(app: FastifyInstance, deps: SessionsRoute
         return reply.status(422).send({ detail: err instanceof Error ? err.message : String(err) })
       }
       await ws.flushSessions()
-      return reply.status(201).send({ sessionId: sess.sessionId, cwd: sess.cwd })
+      return reply.status(201).send({ session_id: sess.sessionId, cwd: sess.cwd })
     },
   )
 
@@ -83,7 +83,7 @@ export function registerSessionsRoutes(app: FastifyInstance, deps: SessionsRoute
     }
     const ws = deps.registry.get(wsId).runner.ws
     await ws.ensureSessionsLoaded()
-    return ws.listSessions().map((s) => ({ sessionId: s.sessionId, cwd: s.cwd }))
+    return ws.listSessions().map((s) => ({ session_id: s.sessionId, cwd: s.cwd }))
   })
 
   app.delete<{ Params: WsSessionParams }>(
@@ -98,7 +98,7 @@ export function registerSessionsRoutes(app: FastifyInstance, deps: SessionsRoute
         return reply.status(404).send({ detail: 'session not found' })
       }
       await ws.closeSession(sessionId)
-      return { sessionId }
+      return { session_id: sessionId }
     },
   )
 }

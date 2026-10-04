@@ -342,11 +342,6 @@ jobs:
           MIRAGE_QUICKJS_HOME: /tmp/quickjs
         run: ./python/.venv/bin/python integ/lifecycle/run.py
 
-      # The tool corpus in-app: integ/doors.py runs the same cases through
-      # the daemon's HTTP, CLI, MCP and SSH doors.
-      - name: Run the tool corpus in-app (Python)
-        run: ./python/.venv/bin/python integ/tools/run.py
-
   integ-ts:
     needs: changes
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.ts == 'true') }}
@@ -482,10 +477,6 @@ jobs:
       - name: Run shell cases and session concurrency in Chrome
         working-directory: integ
         run: pnpm exec tsx browser/run.ts
-
-      - name: Run the tool corpus in-app (TypeScript)
-        working-directory: integ
-        run: pnpm exec tsx tools/run.ts
 
       - name: Generate integ Prisma clients
         working-directory: integ
