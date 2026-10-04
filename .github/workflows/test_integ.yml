@@ -471,6 +471,13 @@ jobs:
         working-directory: integ
         run: pnpm exec tsx lifecycle/run.ts
 
+      # The browser wrapper again, in a real Chrome page: there is no
+      # task-local async context there, so every session shares the
+      # fallback slot that Node never exercises.
+      - name: Run shell cases and session concurrency in Chrome
+        working-directory: integ
+        run: pnpm exec tsx browser/run.ts
+
       - name: Generate integ Prisma clients
         working-directory: integ
         run: pnpm run prisma:clients
