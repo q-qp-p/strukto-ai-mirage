@@ -250,10 +250,7 @@ export default tseslint.config(
     // bundles, so every module they load must run without Node. A
     // `node:crypto` import in file_version.ts typechecked, tested and
     // built clean and only failed inside a browser bundle.
-    files: [
-      'packages/agents/src/{file_version,io_text,prompt,read_file,tool_descriptions,tool_operations}.ts',
-      'packages/agents/src/{openai,read_file,vercel}/**/*.ts',
-    ],
+    files: ['packages/agents/src/prompt.ts', 'packages/agents/src/{openai,vercel}/**/*.ts'],
     ignores: ['**/*.test.ts'],
     rules: {
       'no-restricted-imports': [
