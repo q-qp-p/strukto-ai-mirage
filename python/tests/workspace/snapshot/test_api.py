@@ -12,6 +12,7 @@
 # limitations under the License.
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
+import asyncio
 import io
 import os
 from collections.abc import Iterator
@@ -107,6 +108,22 @@ async def test_a_target_that_takes_part_of_a_write_gets_the_rest():
     assert size == len(out.data) > 0
     loaded = await Workspace.load(io.BytesIO(bytes(out.data)))
     assert await _cat(loaded) == "kept\n"
+
+
+class _Full(io.RawIOBase):
+    """A raw stream that takes nothing."""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, b) -> int:
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_a_target_that_takes_nothing_fails_the_snapshot():
+    with pytest.raises(OSError, match="took none"):
+        await asyncio.wait_for((await _written()).snapshot(_Full()), 10)
 
 
 @pytest.mark.asyncio

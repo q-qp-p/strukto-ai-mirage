@@ -75,10 +75,15 @@ class _Counted:
 
         Returns:
             int: how many were written.
+
+        Raises:
+            OSError: the target took none of a write.
         """
         view = memoryview(data).cast("B")
         while view:
             taken = self._target.write(view)
+            if taken == 0:
+                raise OSError("the snapshot target took none of a write")
             view = view[len(view) if taken is None else taken :]
         written = memoryview(data).nbytes
         self.size += written
