@@ -21,11 +21,13 @@ from dulwich.objects import ObjectID
 
 from mirage.commands.cli.builtin.git.checkout import (
     DETACHED_ADVICE,
-    IDENTITY,
     switch_to,
-    tree_of,
 )
-from mirage.commands.cli.builtin.git.errors import GitError, NoWorkspaceError
+from mirage.commands.cli.builtin.git.errors import (
+    CloneReadOnlyError,
+    GitError,
+    NoWorkspaceError,
+)
 from mirage.commands.cli.builtin.git.fetch import (
     HEADS,
     TAGS,
@@ -40,7 +42,12 @@ from mirage.commands.cli.builtin.git.io import (
     remove_tree,
     write_file,
 )
-from mirage.commands.cli.builtin.git.reflog import ZERO, append, entry
+from mirage.commands.cli.builtin.git.reflog import (
+    IDENTITY,
+    ZERO,
+    append,
+    entry,
+)
 from mirage.commands.cli.builtin.git.refs import (
     detach_head,
     set_head,
@@ -54,6 +61,7 @@ from mirage.commands.cli.builtin.git.transport import (
     is_local,
     open_transport,
 )
+from mirage.commands.cli.builtin.git.tree import tree_of
 from mirage.commands.cli.builtin.git.types import RepoLocation
 from mirage.commands.cli.builtin.git.util import (
     config_section,
@@ -347,3 +355,21 @@ async def _populate(
             mounts,
         )
     return notes
+
+
+def clone_read_only(
+    inv: CLIInvocation[None], location: RepoLocation | None
+) -> GitError:
+    """clone's refusal by a read-only mount, at the work tree it could
+    not make.
+
+    Args:
+        inv (CLIInvocation[None]): the line's invocation record.
+        location (RepoLocation | None): the repository it opened.
+    """
+    texts = inv.texts
+    return CloneReadOnlyError(
+        texts[1]
+        if len(texts) > 1
+        else default_directory(texts[0] if texts else "")
+    )

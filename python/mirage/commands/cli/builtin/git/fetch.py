@@ -23,10 +23,10 @@ from dulwich.objects import Commit, ObjectID
 from dulwich.refs import Ref
 from dulwich.repo import BaseRepo
 
-from mirage.commands.cli.builtin.git.checkout import IDENTITY
 from mirage.commands.cli.builtin.git.constants import DWIM_RULES
 from mirage.commands.cli.builtin.git.discover import is_bare
 from mirage.commands.cli.builtin.git.errors import (
+    FetchHeadReadOnlyError,
     GitError,
     MissingRepositoryError,
     NoWorkspaceError,
@@ -34,7 +34,12 @@ from mirage.commands.cli.builtin.git.errors import (
 from mirage.commands.cli.builtin.git.inspect import global_sources
 from mirage.commands.cli.builtin.git.io import read_optional, write_file
 from mirage.commands.cli.builtin.git.objects import abbrev_for, store_pack
-from mirage.commands.cli.builtin.git.reflog import ZERO, append, entry
+from mirage.commands.cli.builtin.git.reflog import (
+    IDENTITY,
+    ZERO,
+    append,
+    entry,
+)
 from mirage.commands.cli.builtin.git.refs import (
     delete_ref,
     mapped,
@@ -731,3 +736,20 @@ async def fetch(
         )
     except GitError as exc:
         return fatal(exc)
+
+
+def fetch_read_only(
+    inv: CLIInvocation[None], location: RepoLocation | None
+) -> GitError:
+    """fetch's refusal by a read-only mount, at FETCH_HEAD, named the way
+    git names it from the top of the work tree.
+
+    Args:
+        inv (CLIInvocation[None]): the line's invocation record.
+        location (RepoLocation | None): the repository it opened.
+    """
+    if location is None or location.gitdir == posixpath.join(
+        location.worktree, ".git"
+    ):
+        return FetchHeadReadOnlyError(f".git/{FETCH_HEAD}")
+    return FetchHeadReadOnlyError(posixpath.join(location.gitdir, FETCH_HEAD))

@@ -13,11 +13,12 @@
 # ========= Copyright 2026 @ Strukto.AI All Rights Reserved. =========
 
 import asyncio
+import posixpath
 import time
 from collections import Counter
 from dataclasses import dataclass
 
-from dulwich.objects import ObjectID, ShaFile, Tag
+from dulwich.objects import ShaFile, Tag
 from dulwich.refs import Ref
 from dulwich.repo import BaseRepo
 
@@ -31,11 +32,14 @@ from mirage.commands.cli.builtin.git.errors import (
     ListModeOnlyError,
     MissingTagMessageError,
     NoWorkspaceError,
+    RefDeleteReadOnlyError,
     RefLockError,
+    RefReadOnlyError,
     RefUpdateConflictError,
     TagExistsError,
     TagNotFoundError,
     TagUsageError,
+    TagWriteReadOnlyError,
     TooManyArgumentsError,
     UnknownSwitchError,
     UnresolvedRefError,
@@ -70,6 +74,7 @@ from mirage.commands.cli.builtin.git.refs import (
 )
 from mirage.commands.cli.builtin.git.revparse import resolve_object
 from mirage.commands.cli.builtin.git.session import opened
+from mirage.commands.cli.builtin.git.types import RepoLocation
 from mirage.commands.cli.builtin.git.util import (
     check_operands,
     escaped,
@@ -143,24 +148,22 @@ def parse_flags(fl: FlagView) -> TagFlags:
     )
 
 
-def resolve_target(repo: BaseRepo, known: set[Ref], revision: str) -> ShaFile:
+def resolve_target(repo: BaseRepo, revision: str) -> ShaFile:
     """The object a new tag points at.
 
     A tag made from another tag points at the tag object itself rather
-    than at what it peels to, which is git's own rule. Anything else is
-    resolved as an object expression, because git tags any object and
-    its usage line says so: ``HEAD^{tree}`` and ``HEAD:a.txt`` are as
-    good a target as a branch, and the type resolution lands on is what
-    the tag records.
+    than at what it peels to, which is git's own rule, and the type is
+    recorded as read: a lightweight tag is a ref like any other and
+    points at whatever it was made from, so ``tag blobtag HEAD:a.txt``
+    then ``tag -a release -m x blobtag`` records ``type blob``. Anything
+    else is resolved as an object expression, because git tags any
+    object and its usage line says so: ``HEAD^{tree}`` and
+    ``HEAD:a.txt`` are as good a target as a branch.
 
     Args:
         repo (BaseRepo): the opened repository.
-        known (set[Ref]): every ref the repository publishes.
         revision (str): the operand as the user spelled it.
     """
-    ref = Ref(f"{TAG_PREFIX}{revision}".encode())
-    if ref in known:
-        return repo.object_store[ObjectID(repo.refs[ref])]
     try:
         return resolve_object(repo, revision)
     except GitError as exc:
@@ -346,9 +349,7 @@ async def tag(inv: CLIInvocation[None]) -> tuple[ByteSource | None, IOResult]:
             raise TagExistsError(name)
         if flags.annotate and flags.message is None:
             raise MissingTagMessageError()
-        target = resolve_target(
-            repo, known, texts[1] if len(texts) > 1 else HEAD
-        )
+        target = resolve_target(repo, texts[1] if len(texts) > 1 else HEAD)
         if flags.annotate:
             written = await asyncio.to_thread(
                 build_tag,
@@ -377,3 +378,25 @@ async def tag(inv: CLIInvocation[None]) -> tuple[ByteSource | None, IOResult]:
     return yield_bytes(
         f"Updated tag '{name}' (was {short(was, abbrev_for(repo))})\n".encode()
     ), IOResult()
+
+
+def tag_read_only(
+    inv: CLIInvocation[None], location: RepoLocation | None
+) -> GitError:
+    """tag's refusal by a read-only mount: the lock on the ref it creates
+    or deletes, and for an annotated tag the object it could not write
+    first.
+
+    Args:
+        inv (CLIInvocation[None]): the line's invocation record.
+        location (RepoLocation | None): the repository it opened.
+    """
+    fl = FlagView(inv.flags)
+    ref = f"{TAG_PREFIX}{inv.texts[0] if inv.texts else ''}"
+    root = location.commondir if location is not None else ".git"
+    path = posixpath.join(root, ref)
+    if fl.as_bool("delete"):
+        return RefDeleteReadOnlyError(ref, path)
+    if fl.as_bool("annotate") or fl.raw("message") is not None:
+        return TagWriteReadOnlyError()
+    return RefReadOnlyError(ref, path)
