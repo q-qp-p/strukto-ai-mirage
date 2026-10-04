@@ -64,7 +64,11 @@ class _Counted:
         self.size = 0
 
     def write(self, data: bytes) -> int:
-        """Write to the target and count the bytes.
+        """Write all of the bytes to the target and count them.
+
+        A target that takes fewer bytes than offered is written again
+        with the rest; one that answers None took them all, as file-like
+        objects without a count do.
 
         Args:
             data (bytes): the bytes.
@@ -72,7 +76,10 @@ class _Counted:
         Returns:
             int: how many were written.
         """
-        self._target.write(data)
+        view = memoryview(data).cast("B")
+        while view:
+            taken = self._target.write(view)
+            view = view[len(view) if taken is None else taken :]
         written = memoryview(data).nbytes
         self.size += written
         return written

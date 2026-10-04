@@ -85,6 +85,30 @@ async def test_a_snapshot_streams_to_a_pipe(compress):
     assert await _cat(await Workspace.load(io.BytesIO(data))) == "kept\n"
 
 
+class _Trickle(io.RawIOBase):
+    """A raw stream that takes at most three bytes per write."""
+
+    def __init__(self) -> None:
+        self.data = bytearray()
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, b) -> int:
+        taken = bytes(b[:3])
+        self.data += taken
+        return len(taken)
+
+
+@pytest.mark.asyncio
+async def test_a_target_that_takes_part_of_a_write_gets_the_rest():
+    out = _Trickle()
+    size = await (await _written()).snapshot(out)
+    assert size == len(out.data) > 0
+    loaded = await Workspace.load(io.BytesIO(bytes(out.data)))
+    assert await _cat(loaded) == "kept\n"
+
+
 @pytest.mark.asyncio
 async def test_a_snapshot_round_trips_through_bytes():
     buffer = io.BytesIO()
