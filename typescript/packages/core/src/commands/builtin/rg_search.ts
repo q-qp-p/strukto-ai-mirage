@@ -454,34 +454,63 @@ export class RgBinary {
    * whatever had arrived, so each served chunk is one, never waited past, and
    * one longer than the buffer is cut into buffers. A file's first read fills
    * the buffer, since the binary decision rests on it, so the chunks a backend
-   * serves (8 KiB from disk and S3) are joined until it is whole; later reads
-   * take what has arrived, so a search never waits past its answer. A walked
-   * file's first buffer grows until it holds a whole line; a named file's
-   * first buffer is all a memory map checks.
+   * serves (8 KiB from disk and S3) are held until it is whole and joined
+   * once; later reads take what has arrived, so a search never waits past its
+   * answer. A walked file's first buffer grows until it holds a whole line,
+   * and a NUL in it ends the read the moment it arrives; a named file's first
+   * buffer is all a memory map checks.
    */
   private async *reads(
     source: AsyncIterable<Uint8Array>,
     pipe: boolean,
   ): AsyncGenerator<Uint8Array> {
-    let held: Uint8Array = new Uint8Array(0)
-    let first = true
+    let parts: Uint8Array[] = []
+    let size = 0
+    let newline: number | null = null
+    let nul: number | null = null
+    let filling = !pipe
     for await (const chunk of source) {
-      held = held.length === 0 ? chunk : concat([held, chunk])
-      while (held.length > 0) {
-        let end = RG_BUFFER_BYTES
-        if (first && this.mode === 'quit') {
-          while (end < held.length && !held.subarray(0, end).includes(0x0a)) {
-            end += RG_BUFFER_BYTES
-          }
-          if (!pipe && !held.subarray(0, end).includes(0x0a)) break
+      if (!filling) {
+        for (let start = 0; start < chunk.length; start += RG_BUFFER_BYTES) {
+          yield chunk.subarray(start, start + RG_BUFFER_BYTES)
         }
-        if (first && !pipe && held.length < end) break
-        yield held.subarray(0, end)
-        held = held.subarray(end)
-        first = false
+        continue
+      }
+      if (newline === null) {
+        const at = chunk.indexOf(0x0a)
+        if (at >= 0) newline = size + at
+      }
+      if (nul === null) {
+        const at = chunk.indexOf(0)
+        if (at >= 0) nul = size + at
+      }
+      parts.push(chunk)
+      size += chunk.length
+      const end = this.firstEnd(newline)
+      if (this.mode === 'quit' && nul !== null && (end === null || nul < end)) {
+        yield concat(parts)
+        return
+      }
+      if (end === null || size < end) continue
+      const held = concat(parts)
+      parts = []
+      filling = false
+      yield held.subarray(0, end)
+      for (let start = end; start < held.length; start += RG_BUFFER_BYTES) {
+        yield held.subarray(start, start + RG_BUFFER_BYTES)
       }
     }
-    if (held.length > 0) yield held
+    if (parts.length > 0) yield concat(parts)
+  }
+
+  /**
+   * Where the first buffer ends: 64 KiB, or for a walked file the first 64 KiB
+   * step past its first newline, null until one came.
+   */
+  private firstEnd(newline: number | null): number | null {
+    if (this.mode !== 'quit') return RG_BUFFER_BYTES
+    if (newline === null) return null
+    return (Math.floor(newline / RG_BUFFER_BYTES) + 1) * RG_BUFFER_BYTES
   }
 
   /** Whether a walked file's first buffer held a NUL, so none of it was searched. */

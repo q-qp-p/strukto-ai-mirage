@@ -479,33 +479,60 @@ class RgBinary:
         one, never waited past, and one longer than the buffer is cut
         into buffers. A file's first read fills the buffer, since the
         binary decision rests on it, so the chunks a backend serves (8
-        KiB from disk and S3) are joined until it is whole; later reads
-        take what has arrived, so a search never waits past its answer.
-        A walked file's first buffer grows until it holds a whole line; a
-        named file's first buffer is all a memory map checks.
+        KiB from disk and S3) are held until it is whole and joined
+        once; later reads take what has arrived, so a search never waits
+        past its answer. A walked file's first buffer grows until it
+        holds a whole line, and a NUL in it ends the read the moment it
+        arrives; a named file's first buffer is all a memory map checks.
 
         Args:
             source (AsyncIterator[bytes]): the haystack as served.
             pipe (bool): each served chunk is one read.
         """
-        held = b""
-        first = True
+        parts: list[bytes] = []
+        size = 0
+        newline: int | None = None
+        nul: int | None = None
+        filling = not pipe
         async for chunk in source:
-            held = held + chunk if held else chunk
-            while held:
-                end = RG_BUFFER_BYTES
-                if first and self.mode == "quit":
-                    while end < len(held) and b"\n" not in held[:end]:
-                        end += RG_BUFFER_BYTES
-                    if not pipe and b"\n" not in held[:end]:
-                        break
-                if first and not pipe and len(held) < end:
-                    break
-                yield held[:end]
-                held = held[end:]
-                first = False
-        if held:
-            yield held
+            if not filling:
+                for start in range(0, len(chunk), RG_BUFFER_BYTES):
+                    yield chunk[start : start + RG_BUFFER_BYTES]
+                continue
+            if newline is None and (at := chunk.find(b"\n")) >= 0:
+                newline = size + at
+            if nul is None and (at := chunk.find(b"\0")) >= 0:
+                nul = size + at
+            parts.append(chunk)
+            size += len(chunk)
+            end = self._first_end(newline)
+            if self.mode == "quit" and nul is not None:
+                if end is None or nul < end:
+                    yield b"".join(parts)
+                    return
+            if end is None or size < end:
+                continue
+            held = b"".join(parts)
+            parts = []
+            filling = False
+            yield held[:end]
+            for start in range(end, len(held), RG_BUFFER_BYTES):
+                yield held[start : start + RG_BUFFER_BYTES]
+        if parts:
+            yield b"".join(parts)
+
+    def _first_end(self, newline: int | None) -> int | None:
+        """Where the first buffer ends: 64 KiB, or for a walked file the
+        first 64 KiB step past its first newline, None until one came.
+
+        Args:
+            newline (int | None): the first newline's offset, if seen.
+        """
+        if self.mode != "quit":
+            return RG_BUFFER_BYTES
+        if newline is None:
+            return None
+        return (newline // RG_BUFFER_BYTES + 1) * RG_BUFFER_BYTES
 
     def notice(self, label: str | None) -> bytes:
         """ripgrep's line for a binary file a printed match was found in.
